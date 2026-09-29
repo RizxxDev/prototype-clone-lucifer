@@ -26,9 +26,9 @@ Target jangka panjang project ini adalah membangun bot GTPS yang memiliki kemamp
 | Fase | Fokus | Status |
 |:---:|---|:---:|
 | **1** | CLI, HTTP login, ENet connect, kirim/terima paket, auto-warp | ✅ Terverifikasi pada GTPS nyata (CreativePS) |
-| **2** | Parser paket: world, inventory, player, chat | ⏳ Belum |
-| **3** | Action: `moveTo`, `place`, `hit`, `warp`, `say` | ⏳ Belum |
-| **4** | Scripting Lua + API bergaya Lucifer Lua v2.86 | ⏳ Belum |
+| **2** | Parser paket: world tiles, inventory, player tracking, dropped objects | ✅ Selesai (TankPacket 56b & WorldState) |
+| **3** | Action: `move`, `punch`, `place`, `wrench`, `collect`, `drop`, `trash`, `farm` | ✅ Selesai (BotActions & AutoFarm) |
+| **4** | Scripting Lua + API bergaya Lucifer Lua v2.86 | ⏳ Tahap Berikutnya |
 | **5** | Multi-bot, auto-reconnect, proxy | ⏳ Belum |
 | **6** | GUI menggunakan ImGui atau web | ⏳ Belum |
 
@@ -256,17 +256,32 @@ Setelah build dan menjalankan bot:
 > help
 ```
 
-### Command
+### Command Suite (Lucifer Style)
 
-| Command | Alias | Fungsi |
-|---|---|---|
-| `help` | `?` | Menampilkan daftar command |
-| `say <text>` | `s` | Mengirim chat ke world |
-| `warp <world>` | `w` | Warp ke world |
-| `raw <hex>` | — | Mengirim paket mentah untuk debugging |
-| `status` | `st` | Menampilkan status bot |
-| `clear` | `cls` | Membersihkan layar |
-| `quit` | `exit`, `q` | Keluar dan disconnect |
+| Kategori | Command | Alias | Fungsi |
+|---|---|---|---|
+| **Movement & Tiles** | `pos` | `where` | Menampilkan koordinat bot (pixel & tile) |
+| | `move <x> <y>` | `m` | Berjalan halus (*smooth walk*) ke tile (x, y) |
+| | `punch <x> <y>` | `p`, `hit` | Memukul / menghancurkan blok pada tile (x, y) |
+| | `place <id> <x> <y>` | — | Memasang blok / bibit dengan ID pada tile (x, y) |
+| | `wrench <x> <y>` | — | Membuka dialog wrench pada tile (x, y) |
+| | `enter` | — | Mengaktifkan pintu / portal di posisi bot |
+| **Backpack & Items** | `inv` | `inventory` | Melihat daftar item di backpack & jumlah slot |
+| | `collect [radius]` | `c` | Mengambil drop item di sekitar (default: 4 tile) |
+| | `drop <id> <count>` | — | Menjatuhkan item dari backpack |
+| | `trash <id> <count>` | — | Membuang / trash item dari backpack |
+| **World & Players** | `world` | — | Menampilkan info world, dimensi, dan tile saat ini |
+| | `players` | `who` | Menampilkan daftar pemain di world (NetID, UserID, Pos) |
+| | `warp <world>` | `w` | Berpindah ke world lain |
+| | `say <text>` | `s` | Mengirim pesan chat ke world |
+| | `respawn` | — | Respawn bot kembali ke pintu awal world |
+| **Automation** | `farm <id> <x> <y> [ms]` | — | Menjalankan loop auto-farm Lucifer (place + punch + collect) |
+| | `stopfarm` | — | Menghentikan loop auto-farm |
+| **Sistem & Debug** | `help` | `?` | Menampilkan daftar command |
+| | `status` | `st` | Menampilkan status koneksi & state bot |
+| | `raw <hex>` | — | Mengirim paket mentah untuk debugging |
+| | `clear` | `cls` | Membersihkan layar konsol |
+| | `quit` | `exit`, `q` | Menghentikan bot dan disconnect |
 
 ### Contoh
 

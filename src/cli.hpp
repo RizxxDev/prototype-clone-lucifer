@@ -2,10 +2,12 @@
 #include <string>
 #include <thread>
 #include <atomic>
-#include <functional>
 #include <vector>
 
 class EnetClient;
+class WorldState;
+class BotActions;
+class AutoFarmController;
 
 struct BotInfo {
     std::string account_name;
@@ -17,7 +19,8 @@ struct BotInfo {
 
 class Cli {
 public:
-    Cli(EnetClient& enet, std::atomic<bool>& running, const BotInfo& info);
+    Cli(EnetClient& enet, std::atomic<bool>& running, const BotInfo& info,
+        WorldState& world, BotActions& actions, AutoFarmController& autofarm);
     ~Cli();
 
     // Memulai REPL thread
@@ -30,20 +33,37 @@ private:
     void run();
     void processCommand(const std::string& line);
 
-    // Command handlers
+    // Command handlers (Lucifer CLI Suite)
     void cmdHelp();
     void cmdSay(const std::string& text);
     void cmdWarp(const std::string& world);
+    void cmdMove(const std::string& args);
+    void cmdPunch(const std::string& args);
+    void cmdPlace(const std::string& args);
+    void cmdWrench(const std::string& args);
+    void cmdEnter();
+    void cmdCollect(const std::string& args);
+    void cmdDrop(const std::string& args);
+    void cmdTrash(const std::string& args);
+    void cmdInventory();
+    void cmdPlayers();
+    void cmdWorld();
+    void cmdPos();
+    void cmdFarm(const std::string& args);
+    void cmdStopFarm();
+    void cmdRespawn();
     void cmdRaw(const std::string& hex_str);
     void cmdStatus();
     void cmdClear();
     void cmdQuit();
 
-    // Helper hex parsing
-    static bool hexToBytes(const std::string& hex, std::vector<uint8_t>& out);
+    bool hexToBytes(const std::string& hex, std::vector<uint8_t>& out);
 
     EnetClient& enet_;
     std::atomic<bool>& running_;
     BotInfo info_;
+    WorldState& world_;
+    BotActions& actions_;
+    AutoFarmController& autofarm_;
     std::thread thread_;
 };

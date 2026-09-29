@@ -4,12 +4,16 @@
 #include <chrono>
 #include <csignal>
 #include <atomic>
+#include <cstring>
 
 #include <nlohmann/json.hpp>
 #include "logger.hpp"
 #include "http_client.hpp"
 #include "enet_client.hpp"
 #include "packet.hpp"
+#include "game_packet.hpp"
+#include "world.hpp"
+#include "bot_actions.hpp"
 #include "cli.hpp"
 #include "env.hpp"
 
@@ -26,7 +30,7 @@ int main(int argc, char** argv) {
     std::signal(SIGTERM, signal_handler);
 
     std::cout << "========================================\n";
-    std::cout << "  GTPS Bot - Fase 1 (Login + Connect)\n";
+    std::cout << "  GTPS Lucifer Bot - Core Suite & CLI\n";
     std::cout << "========================================\n\n";
 
     // ---- Load config (.env prioritized, fallback to JSON) ----
@@ -120,17 +124,11 @@ int main(int argc, char** argv) {
     if (!login_resp.success) {
         Logger::log("[!] Login HTTP GAGAL");
         Logger::log("    Error: ", login_resp.error);
-        Logger::log("\n[*] Kemungkinan penyebab:");
-        Logger::log("    1. GTPS HTTP server tidak jalan");
-        Logger::log("    2. Endpoint login berbeda (cek dokumentasi GTPS)");
-        Logger::log("    3. Format request beda (butuh field tambahan)");
-        Logger::log("    4. Hosts belum diarahkan ke GTPS");
         return 1;
     }
 
     Logger::log("[+] HTTP login OK");
 
-    // Kalau GTPS kasih server IP berbeda, pakai itu
     if (!login_resp.server_ip.empty()) {
         game_host = login_resp.server_ip;
     }
@@ -138,11 +136,14 @@ int main(int argc, char** argv) {
         game_port = login_resp.server_port;
     }
 
-    // ---- Fase 1b: ENet Connect ----
-    Logger::log("\n--- FASE 1b: ENet Connect ---");
+    // ---- Fase 1b & 2: ENet Connect & Lucifer State Engine ----
+    Logger::log("\n--- FASE 1b & 2: ENet Connect & Lucifer State Engine ---");
 
     try {
         EnetClient enet;
+        WorldState world;
+        BotActions actions(enet, world);
+        AutoFarmController autofarm(actions, world);
 
         std::string handshake;
         if (!acc_name.empty() && !acc_pass.empty()) {
@@ -184,8 +185,7 @@ int main(int argc, char** argv) {
         auto warp_to_target_world = [&]() {
             if (!target_world.empty() && !in_world.load() && !warped_to_target.exchange(true)) {
                 Logger::log("[*] 🚀 Mengirim request warp ke world: ", target_world, "...");
-                enet.sendText(GtPacket::NET_MESSAGE_GAME_MESSAGE, "action|join_request\nname|" + target_world + "\ninvitedWorld|0\n");
-                enet.sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT, "action|join_request\nname|" + target_world + "\ninvitedWorld|0\n");
+                actions.warp(target_world);
             }
         };
 
@@ -206,7 +206,7 @@ int main(int argc, char** argv) {
             }
         };
 
-        // Callback untuk paket masuk
+        // Callback untuk paket masuk dari server
         enet.onPacket([&](const GtPacketData& pkt) {
             if (pkt.type == GtPacket::NET_MESSAGE_SERVER_HELLO) {
                 Logger::log("  👋 SERVER_HELLO diterima dari server");
@@ -229,22 +229,45 @@ int main(int argc, char** argv) {
             else if (pkt.type == GtPacket::NET_MESSAGE_GAME_PACKET) {
                 uint8_t tank_type = pkt.payload.size() > 0 ? pkt.payload[0] : 0;
 
-                // Tank packet 4: SEND_MAP_DATA (World Map)
-                if (tank_type == 4) {
+                // Tank packet 0: PACKET_STATE (Player Movement / Pos)
+                if (tank_type == PACKET_STATE && pkt.payload.size() >= sizeof(GameUpdatePacket)) {
+                    GameUpdatePacket state_pkt;
+                    std::memcpy(&state_pkt, pkt.payload.data(), sizeof(GameUpdatePacket));
+                    world.updatePlayerPos(state_pkt.net_id, state_pkt.pos_x, state_pkt.pos_y);
+                }
+                // Tank packet 4: PACKET_SEND_MAP_DATA (World Map)
+                else if (tank_type == PACKET_SEND_MAP_DATA) {
                     in_world = true;
+                    if (pkt.payload.size() > sizeof(GameUpdatePacket)) {
+                        world.parseMapData(pkt.payload.data() + sizeof(GameUpdatePacket),
+                                           pkt.payload.size() - sizeof(GameUpdatePacket));
+                    }
+                    world.setWorldName(target_world);
                     Logger::log("\n************************************************************");
                     Logger::log("  🎉 AKUN ONLINE! PACKET_SEND_MAP_DATA diterima dari server!");
                     Logger::log("  🌍 Bot sudah berhasil masuk dan berada di dalam world: ", target_world);
                     Logger::log("************************************************************\n");
                 }
-                // Tank packet 9: SEND_INVENTORY_STATE
-                else if (tank_type == 9) {
+                // Tank packet 8: PACKET_ITEM_CHANGE_OBJECT (Dropped item spawned/collected)
+                else if (tank_type == PACKET_ITEM_CHANGE_OBJECT && pkt.payload.size() >= sizeof(GameUpdatePacket)) {
+                    GameUpdatePacket item_pkt;
+                    std::memcpy(&item_pkt, pkt.payload.data(), sizeof(GameUpdatePacket));
+                    world.addOrUpdateDroppedItem(item_pkt.net_id, static_cast<uint16_t>(item_pkt.main_data),
+                                                 item_pkt.count1, item_pkt.pos_x, item_pkt.pos_y);
+                }
+                // Tank packet 9: PACKET_SEND_INVENTORY_STATE
+                else if (tank_type == PACKET_SEND_INVENTORY_STATE) {
+                    if (pkt.payload.size() > sizeof(GameUpdatePacket)) {
+                        world.parseInventory(pkt.payload.data() + sizeof(GameUpdatePacket),
+                                             pkt.payload.size() - sizeof(GameUpdatePacket));
+                    }
                     Logger::log("[+] 🎒 Inventory state diterima! Pemain siap di server.");
                     warp_to_target_world();
                 }
-                // Tank packet 1: CALL_FUNCTION (VariantList)
-                else if (tank_type == 1 && pkt.payload.size() >= 56) {
-                    auto vars = parseVariantList(pkt.payload.data() + 56, pkt.payload.size() - 56);
+                // Tank packet 1: PACKET_CALL_FUNCTION (VariantList)
+                else if (tank_type == PACKET_CALL_FUNCTION && pkt.payload.size() >= sizeof(GameUpdatePacket)) {
+                    auto vars = parseVariantList(pkt.payload.data() + sizeof(GameUpdatePacket),
+                                                 pkt.payload.size() - sizeof(GameUpdatePacket));
                     if (!vars.empty()) {
                         std::string fn = vars[0].str_val;
 
@@ -269,9 +292,18 @@ int main(int argc, char** argv) {
                         else if (fn.find("OnSpawn") != std::string::npos) {
                             in_world = true;
                             std::string spawn_data = vars.size() > 1 ? vars[1].str_val : "";
-                            Logger::log("[+] 👤 OnSpawn diterima! Karakter spawn di world:");
-                            Logger::log("    Info: ", spawn_data);
+                            world.parseSpawn(spawn_data, acc_name);
+                            Logger::log("[+] 👤 OnSpawn diterima! Karakter terdaftar di world.");
                             Logger::log("[+] ✅ Akun sekarang ONLINE di dalam game!");
+                        }
+                        else if (fn.find("OnRemove") != std::string::npos) {
+                            std::string remove_data = vars.size() > 1 ? vars[1].str_val : "";
+                            world.parseRemove(remove_data);
+                        }
+                        else if (fn.find("OnTalkBubble") != std::string::npos) {
+                            int bubble_netid = vars.size() > 1 ? get_vint(vars[1]) : -1;
+                            std::string bubble_msg = vars.size() > 2 ? vars[2].str_val : "";
+                            Logger::log("  💬 [Bubble NetID #", bubble_netid, "]: ", bubble_msg);
                         }
                         else if (fn.find("OnFailedToEnterWorld") != std::string::npos) {
                             Logger::log("[!] Gagal masuk world (rate limited / busy), retry dalam 2 detik...");
@@ -352,12 +384,13 @@ int main(int argc, char** argv) {
                             sub_handshake += "lmode|" + std::to_string(lmode) + "\n";
 
                             // Hubungkan ke subserver pada background thread
-                            std::thread([&enet, sub_host, sub_port, sub_handshake, &current_handshake, &handshake_sent, &auto_warped, &warped_to_target, &in_world, &redirecting]() {
+                            std::thread([&enet, &world, sub_host, sub_port, sub_handshake, &current_handshake, &handshake_sent, &auto_warped, &warped_to_target, &in_world, &redirecting]() {
                                 redirecting = true;
                                 Logger::log("[*] 🔄 Mengalihkan koneksi ke sub-server ", sub_host, ":", sub_port, "...");
                                 enet.disconnect();
                                 std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
+                                world.clearWorld();
                                 current_handshake = sub_handshake;
                                 handshake_sent = false;
                                 auto_warped = false;
@@ -391,16 +424,12 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        Logger::log("\n========================================");
-        Logger::log("  Bot siap. Menunggu server handshake...");
-        Logger::log("========================================\n");
-
-        Logger::log("\n========================================");
-        Logger::log("  Bot siap. Ketik 'help' untuk command.");
-        Logger::log("========================================\n");
+        Logger::log("\n========================================================");
+        Logger::log("  🔥 Lucifer Bot Siap. Ketik 'help' untuk daftar perintah.");
+        Logger::log("========================================================\n");
 
         BotInfo info{acc_name, version, platform, game_host, game_port};
-        Cli cli(enet, g_running, info);
+        Cli cli(enet, g_running, info, world, actions, autofarm);
         cli.start();
 
         // Loop utama
@@ -418,6 +447,7 @@ int main(int argc, char** argv) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
 
+        autofarm.stop();
         cli.stop();
         Logger::log("[*] Keluar dari loop utama.");
         enet.disconnect();

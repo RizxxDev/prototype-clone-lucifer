@@ -39,6 +39,8 @@ add_executable(gtps_bot
     src/http_client.cpp
     src/enet_client.cpp
     src/cli.cpp
+    src/world.cpp
+    src/bot_actions.cpp
 )
 
 target_include_directories(gtps_bot PRIVATE
