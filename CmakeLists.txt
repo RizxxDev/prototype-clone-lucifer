@@ -3,8 +3,7 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "Minimum policy version")
 project(gtps_bot CXX)
 
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-add_compile_definitions(NOMINMAX)
+add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
 
 # ---- Dependencies ----
 include(FetchContent)
@@ -33,6 +32,30 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(httplib)
 
+# Dear ImGui (v1.91.8)
+FetchContent_Declare(
+    imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG        v1.91.8
+)
+FetchContent_GetProperties(imgui)
+if(NOT imgui_POPULATED)
+    FetchContent_Populate(imgui)
+    add_library(imgui STATIC
+        ${imgui_SOURCE_DIR}/imgui.cpp
+        ${imgui_SOURCE_DIR}/imgui_demo.cpp
+        ${imgui_SOURCE_DIR}/imgui_draw.cpp
+        ${imgui_SOURCE_DIR}/imgui_tables.cpp
+        ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp
+    )
+    target_include_directories(imgui PUBLIC
+        ${imgui_SOURCE_DIR}
+        ${imgui_SOURCE_DIR}/backends
+    )
+endif()
+
 # ---- Target ----
 add_executable(gtps_bot
     src/main.cpp
@@ -41,24 +64,27 @@ add_executable(gtps_bot
     src/cli.cpp
     src/world.cpp
     src/bot_actions.cpp
+    src/gui.cpp
 )
 
 target_include_directories(gtps_bot PRIVATE
     ${enet_SOURCE_DIR}/include
     ${json_SOURCE_DIR}/include
     ${httplib_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
 )
 
-target_link_libraries(gtps_bot PRIVATE enet)
+target_link_libraries(gtps_bot PRIVATE enet imgui)
 
-# OpenSSL untuk HTTPS (opsional, kalau GTPS pakai HTTPS)
+# OpenSSL untuk HTTPS (opsional)
 find_package(OpenSSL QUIET)
 if(OpenSSL_FOUND)
     target_link_libraries(gtps_bot PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     target_compile_definitions(gtps_bot PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
 endif()
 
-# Windows: ws2_32, winmm, winhttp
+# Windows libraries
 if(WIN32)
-    target_link_libraries(gtps_bot PRIVATE ws2_32 winmm winhttp)
+    target_link_libraries(gtps_bot PRIVATE ws2_32 winmm winhttp d3d11 d3dcompiler dxgi dwmapi)
 endif()

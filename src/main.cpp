@@ -16,6 +16,7 @@
 #include "bot_actions.hpp"
 #include "cli.hpp"
 #include "env.hpp"
+#include "gui.hpp"
 
 using json = nlohmann::json;
 
@@ -424,32 +425,30 @@ int main(int argc, char** argv) {
             return 1;
         }
 
+        BotInfo info{acc_name, version, platform, game_host, game_port};
+        LuciferGui gui(enet, world, actions, autofarm, info, g_running);
+
         Logger::log("\n========================================================");
-        Logger::log("  🔥 Lucifer Bot Siap. Ketik 'help' untuk daftar perintah.");
+        Logger::log("  🔥 Membuka Antarmuka GUI Lucifer (Dear ImGui DX11)...");
         Logger::log("========================================================\n");
 
-        BotInfo info{acc_name, version, platform, game_host, game_port};
-        Cli cli(enet, g_running, info, world, actions, autofarm);
-        cli.start();
-
-        // Loop utama
-        auto last_poll = std::chrono::steady_clock::now();
-        while (g_running && (enet.isConnected() || redirecting)) {
-            enet.poll();
-
-            auto now = std::chrono::steady_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now - last_poll).count();
-            if (elapsed >= 16) { // ~60 FPS
-                last_poll = now;
+        if (gui.init(::GetModuleHandle(nullptr), 1080, 720)) {
+            // Jalankan GUI Lucifer (Main render loop + ENet polling)
+            gui.run();
+            gui.shutdown();
+        } else {
+            Logger::log("[!] Gagal membuka jendela GUI DirectX 11, fallback ke CLI...");
+            Cli cli(enet, g_running, info, world, actions, autofarm);
+            cli.start();
+            while (g_running && (enet.isConnected() || redirecting)) {
+                enet.poll();
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            cli.stop();
         }
 
         autofarm.stop();
-        cli.stop();
-        Logger::log("[*] Keluar dari loop utama.");
+        Logger::log("[*] Menutup bot dan disconnect dari server.");
         enet.disconnect();
 
     } catch (const std::exception& e) {

@@ -30,7 +30,7 @@ Target jangka panjang project ini adalah membangun bot GTPS yang memiliki kemamp
 | **3** | Action: `move`, `punch`, `place`, `wrench`, `collect`, `drop`, `trash`, `farm` | ✅ Selesai (BotActions & AutoFarm) |
 | **4** | Scripting Lua + API bergaya Lucifer Lua v2.86 | ⏳ Tahap Berikutnya |
 | **5** | Multi-bot, auto-reconnect, proxy | ⏳ Belum |
-| **6** | GUI menggunakan ImGui atau web | ⏳ Belum |
+| **6** | GUI menggunakan Dear ImGui + DirectX 11 (Native Desktop Window) | ✅ Selesai (Lucifer Desktop Suite) |
 
 > **Status build:** ✅ Terverifikasi & berhasil dibuild di Windows (`build/Release/gtps_bot.exe`).
 > **Status Fase 1:** ✅ Berhasil terhubung ke GTPS, melewati web validation & Discord auto-auth, dan auto-warp ke world tujuan.

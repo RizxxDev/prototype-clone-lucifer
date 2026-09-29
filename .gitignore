@@ -19,6 +19,7 @@ out/
 *.sln
 *.vcxproj*
 
-# OS files
+# OS & temporary files
 Thumbs.db
 Desktop.ini
+imgui.ini

@@ -16,6 +16,8 @@ public:
     static bool verbose;
     static bool hexdump;
     static std::mutex mtx;
+    static std::vector<std::string> history;
+    static const size_t MAX_HISTORY = 1000;
 
     static std::string ts() {
         auto now = std::chrono::system_clock::now();
@@ -37,9 +39,17 @@ public:
     template<typename... Args>
     static void log(Args&&... args) {
         std::lock_guard<std::mutex> lock(mtx);
-        std::cout << "[" << ts() << "] ";
-        (std::cout << ... << args);
-        std::cout << std::endl;
+        std::ostringstream ss;
+        ss << "[" << ts() << "] ";
+        (ss << ... << args);
+        std::string line = ss.str();
+
+        std::cout << line << std::endl;
+
+        if (history.size() >= MAX_HISTORY) {
+            history.erase(history.begin(), history.begin() + 100);
+        }
+        history.push_back(line);
     }
 
     static void hexdumpBytes(const std::string& tag,
@@ -69,5 +79,6 @@ public:
 
 // Inline definitions
 inline bool Logger::verbose = true;
-inline bool Logger::hexdump = true;
+inline bool Logger::hexdump = false;
 inline std::mutex Logger::mtx;
+inline std::vector<std::string> Logger::history;
