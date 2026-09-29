@@ -25,7 +25,7 @@ enum TankPacketType : uint8_t {
     PACKET_SEND_PLAYER_TRIBUTE_DATA        = 12,
     PACKET_SET_ICON_STATE                  = 13,
     PACKET_ITEM_EFFECT                     = 14,
-    PACKET_SET_CHARACTER_STATE             = 15,
+    PACKET_SET_CHARACTER_STATE             = 20,
     PACKET_PING_REPLY                      = 21,
     PACKET_PING_REQUEST                    = 22,
     PACKET_GOT_PUNCHED                     = 24,
@@ -41,6 +41,7 @@ enum TankPacketType : uint8_t {
 
 namespace TankFlags {
     constexpr uint32_t NONE          = 0;
+    constexpr uint32_t EXTRA_DATA    = 0x08;   // 8 (bit 3: extended payload present)
     constexpr uint32_t FACING_LEFT   = 0x10;   // 16 (0x10 is character facing left)
     constexpr uint32_t ON_GROUND     = 0x20;   // 32 (0x20 is standing on ground)
     constexpr uint32_t SWIMMING      = 0x40;   // 64
@@ -74,12 +75,16 @@ static_assert(sizeof(GameUpdatePacket) == 56, "GameUpdatePacket header size must
 
 namespace TankPacketHelper {
 
-    // Serialize TankPacket (56 bytes + optional extra data)
+    // Serialize TankPacket (56 bytes + optional extra data + 1 trailing null byte -> 57/61 bytes)
     inline std::vector<uint8_t> serialize(const GameUpdatePacket& pkt, const uint8_t* extra = nullptr, size_t extra_len = 0) {
         GameUpdatePacket copy = pkt;
         copy.data_size = static_cast<uint32_t>(extra_len);
+        if (extra_len > 0) {
+            copy.flags |= TankFlags::EXTRA_DATA;
+        }
 
-        std::vector<uint8_t> buffer(sizeof(GameUpdatePacket) + extra_len);
+        // GTPS standard: 56 bytes GameUpdatePacket + extra_len + 1 trailing byte (57 bytes minimum payload, 61 bytes packet)
+        std::vector<uint8_t> buffer(sizeof(GameUpdatePacket) + extra_len + 1, 0);
         std::memcpy(buffer.data(), &copy, sizeof(GameUpdatePacket));
         if (extra && extra_len > 0) {
             std::memcpy(buffer.data() + sizeof(GameUpdatePacket), extra, extra_len);

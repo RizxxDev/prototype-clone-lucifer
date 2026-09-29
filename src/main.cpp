@@ -448,6 +448,14 @@ int main(int argc, char** argv) {
 
                     Logger::log("[ENet] 🏓 PING_REQUEST (type=", (int)tank_type, ") dijawab dengan PING_REPLY!");
                 }
+                // Tank packet 20: PACKET_SET_CHARACTER_STATE (State/Clothing update)
+                else if (tank_type == PACKET_SET_CHARACTER_STATE && pkt.payload.size() >= sizeof(GameUpdatePacket)) {
+                    // Packet karakter state dari server (bukan error)
+                }
+                // Tank packet 13: PACKET_SET_ICON_STATE
+                else if (tank_type == PACKET_SET_ICON_STATE && pkt.payload.size() >= sizeof(GameUpdatePacket)) {
+                    // Packet icon state dari server (bukan error)
+                }
                 else {
                     Logger::log("[ENet] 📦 Tank Packet tidak tertangani: type=", (int)tank_type, " len=", pkt.payload.size());
                 }
