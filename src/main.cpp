@@ -17,6 +17,7 @@
 #include "cli.hpp"
 #include "env.hpp"
 #include "gui.hpp"
+#include "lua_engine.hpp"
 
 using json = nlohmann::json;
 
@@ -145,6 +146,7 @@ int main(int argc, char** argv) {
         WorldState world;
         BotActions actions(enet, world);
         AutoFarmController autofarm(actions, world);
+        LuaEngine lua_engine(actions, world, enet);
 
         std::string handshake;
         if (!acc_name.empty() && !acc_pass.empty()) {
@@ -426,7 +428,7 @@ int main(int argc, char** argv) {
         }
 
         BotInfo info{acc_name, version, platform, game_host, game_port};
-        LuciferGui gui(enet, world, actions, autofarm, info, g_running);
+        LuciferGui gui(enet, world, actions, autofarm, lua_engine, info, g_running);
 
         Logger::log("\n========================================================");
         Logger::log("  🔥 Membuka Antarmuka GUI Lucifer (Dear ImGui DX11)...");
@@ -447,6 +449,7 @@ int main(int argc, char** argv) {
             cli.stop();
         }
 
+        lua_engine.stopScript();
         autofarm.stop();
         Logger::log("[*] Menutup bot dan disconnect dari server.");
         enet.disconnect();

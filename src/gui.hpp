@@ -17,6 +17,7 @@ class EnetClient;
 class WorldState;
 class BotActions;
 class AutoFarmController;
+class LuaEngine;
 struct BotInfo;
 
 // ============================================================
@@ -26,11 +27,12 @@ struct BotInfo;
 class LuciferGui {
 public:
     LuciferGui(EnetClient& enet, WorldState& world, BotActions& actions,
-               AutoFarmController& autofarm, BotInfo& info, std::atomic<bool>& running);
+               AutoFarmController& autofarm, LuaEngine& lua_engine,
+               BotInfo& info, std::atomic<bool>& running);
     ~LuciferGui();
 
     // Inisialisasi window Win32 & DirectX 11 device
-    bool init(HINSTANCE hInstance, int width = 1040, int height = 720);
+    bool init(HINSTANCE hInstance, int width = 1080, int height = 740);
 
     // Loop render GUI (akan berjalan hingga user menutup window atau running == false)
     void run();
@@ -45,6 +47,7 @@ private:
     void renderTabInventory();
     void renderTabWorld();
     void renderTabAutoFarm();
+    void renderTabScriptEditor();
     void renderTabConsole();
     void renderTabSettings();
 
@@ -69,6 +72,7 @@ private:
     WorldState& world_;
     BotActions& actions_;
     AutoFarmController& autofarm_;
+    LuaEngine& lua_engine_;
     BotInfo& info_;
     std::atomic<bool>& running_;
 
@@ -96,6 +100,9 @@ private:
     int farm_y_ = 0;
     int farm_delay_ = 180;
     int farm_hits_ = 4;
+
+    // Script Editor Buffers
+    char script_buffer_[16384]{};
 
     // Console Buffers
     char log_filter_[128] = "";

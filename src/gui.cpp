@@ -5,6 +5,7 @@
 #include "cli.hpp"
 #include "logger.hpp"
 #include "env.hpp"
+#include "lua_engine.hpp"
 
 #include "imgui.h"
 #include "imgui_impl_win32.h"
@@ -46,15 +47,34 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 }
 
 LuciferGui::LuciferGui(EnetClient& enet, WorldState& world, BotActions& actions,
-                       AutoFarmController& autofarm, BotInfo& info, std::atomic<bool>& running)
+                       AutoFarmController& autofarm, LuaEngine& lua_engine,
+                       BotInfo& info, std::atomic<bool>& running)
     : enet_(enet), world_(world), actions_(actions),
-      autofarm_(autofarm), info_(info), running_(running) {
+      autofarm_(autofarm), lua_engine_(lua_engine), info_(info), running_(running) {
     g_current_gui = this;
 
     // Inisialisasi buffer dari info akun
     strncpy_s(cfg_account_name_, info_.account_name.c_str(), sizeof(cfg_account_name_) - 1);
     strncpy_s(cfg_server_ip_, info_.game_host.c_str(), sizeof(cfg_server_ip_) - 1);
     cfg_server_port_ = info_.game_port;
+
+    // Default Lua Script Template
+    const char* default_script =
+        "-- Lucifer Lua Script v2.86\n"
+        "-- Tekan tombol [Jalankan Script] di atas untuk mengeksekusi\n\n"
+        "log(\"🚀 Lucifer Lua Script dimulai!\")\n"
+        "local world = bot:getWorld()\n"
+        "log(\"Nama World: \" .. world.name .. \" (\" .. world.width .. \"x\" .. world.height .. \")\")\n\n"
+        "local me = bot:getLocal()\n"
+        "log(\"Posisi Bot: Tile (\" .. me.tile_x .. \", \" .. me.tile_y .. \")\")\n\n"
+        "-- Contoh Loop: Pukul tile di depan/bawah bot 4 kali\n"
+        "for i = 1, 4 do\n"
+        "    bot:hit(me.tile_x, me.tile_y + 1)\n"
+        "    sleep(160)\n"
+        "end\n\n"
+        "bot:collect(3.0)\n"
+        "log(\"✅ Script selesai!\")\n";
+    strncpy_s(script_buffer_, default_script, sizeof(script_buffer_) - 1);
 }
 
 LuciferGui::~LuciferGui() {
@@ -331,6 +351,10 @@ void LuciferGui::renderTabs() {
             }
             if (ImGui::BeginTabItem("🚜 Auto-Farm")) {
                 renderTabAutoFarm();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("📜 Script Editor (Lua)")) {
+                renderTabScriptEditor();
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("📜 Console Logs")) {
@@ -707,6 +731,116 @@ void LuciferGui::renderTabAutoFarm() {
     ImGui::Text("Sisa Stok di Backpack: %d item", current_stock);
 
     ImGui::Columns(1);
+    ImGui::EndChild();
+}
+
+void LuciferGui::renderTabScriptEditor() {
+    bool is_running = lua_engine_.isRunning();
+
+    // Top action bar
+    ImGui::BeginChild("ScriptTopBar", ImVec2(0, 105), true);
+
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "📜 LUCIFER LUA SCRIPT ENGINE v2.86");
+    ImGui::SameLine();
+    if (is_running) {
+        float elapsed_sec = lua_engine_.getExecutionTimeMs() / 1000.0f;
+        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.3f, 1.0f), "● SEDANG BERJALAN (%.1fs)", elapsed_sec);
+    } else {
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "● IDLE (Siap dijalankan)");
+    }
+
+    ImGui::Spacing();
+
+    // Run / Stop buttons
+    if (is_running) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.15f, 0.15f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.25f, 0.25f, 1.0f));
+        if (ImGui::Button("⏹ HENTIKAN SCRIPT", ImVec2(180, 32))) {
+            lua_engine_.stopScript();
+        }
+        ImGui::PopStyleColor(2);
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.75f, 0.25f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.88f, 0.35f, 1.0f));
+        if (ImGui::Button("▶ JALANKAN SCRIPT", ImVec2(180, 32))) {
+            lua_engine_.runScript(script_buffer_);
+        }
+        ImGui::PopStyleColor(2);
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("🧹 Bersihkan", ImVec2(90, 32))) {
+        script_buffer_[0] = '\0';
+    }
+
+    ImGui::SameLine();
+    ImGui::TextDisabled("| Template:");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Auto-Punch")) {
+        const char* t =
+            "-- Template: Auto-Punch loop\n"
+            "local me = bot:getLocal()\n"
+            "for i = 1, 10 do\n"
+            "    bot:hit(me.tile_x, me.tile_y + 1)\n"
+            "    sleep(160)\n"
+            "end\n"
+            "bot:collect(4.0)\n"
+            "log(\"Punch loop done!\")\n";
+        strncpy_s(script_buffer_, t, sizeof(script_buffer_) - 1);
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Patroli Jalan")) {
+        const char* t =
+            "-- Template: Walk Patrol\n"
+            "local me = bot:getLocal()\n"
+            "log(\"Start Patrol from \" .. me.tile_x)\n"
+            "bot:moveTo(me.tile_x + 3, me.tile_y, 40)\n"
+            "sleep(500)\n"
+            "bot:moveTo(me.tile_x, me.tile_y, 40)\n"
+            "log(\"Patrol complete!\")\n";
+        strncpy_s(script_buffer_, t, sizeof(script_buffer_) - 1);
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Spam Chat")) {
+        const char* t =
+            "-- Template: Spam Chat\n"
+            "for i = 1, 3 do\n"
+            "    bot:say(\"Hello from Lucifer Lua Bot! #\" .. i)\n"
+            "    sleep(1000)\n"
+            "end\n";
+        strncpy_s(script_buffer_, t, sizeof(script_buffer_) - 1);
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Cek Tas & Pemain")) {
+        const char* t =
+            "-- Template: Inventory & Player Scanner\n"
+            "local inv = bot:getInventory()\n"
+            "log(\"Total item di tas: \" .. #inv)\n"
+            "for i, item in ipairs(inv) do\n"
+            "    log(\"  Item ID: \" .. item.id .. \" x\" .. item.count)\n"
+            "end\n"
+            "local players = bot:getPlayers()\n"
+            "log(\"Total pemain di world: \" .. #players)\n"
+            "for i, p in ipairs(players) do\n"
+            "    log(\"  Pemain: \" .. p.name .. \" (NetID: \" .. p.net_id .. \")\")\n"
+            "end\n";
+        strncpy_s(script_buffer_, t, sizeof(script_buffer_) - 1);
+    }
+
+    std::string err = lua_engine_.getLastError();
+    if (!err.empty()) {
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.95f, 0.25f, 0.25f, 1.0f), "❌ Error: %s", err.c_str());
+    }
+
+    ImGui::EndChild();
+
+    ImGui::Spacing();
+
+    // Editor Area
+    ImGui::BeginChild("ScriptEditorArea", ImVec2(0, 0), false);
+    ImGui::InputTextMultiline("##luascriptcode", script_buffer_, sizeof(script_buffer_),
+                              ImVec2(-1.0f, -1.0f), ImGuiInputTextFlags_AllowTabInput);
     ImGui::EndChild();
 }
 

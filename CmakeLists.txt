@@ -56,6 +56,24 @@ if(NOT imgui_POPULATED)
     )
 endif()
 
+# Lua (v5.4.6)
+FetchContent_Declare(
+    lua
+    GIT_REPOSITORY https://github.com/lua/lua.git
+    GIT_TAG        v5.4.6
+)
+FetchContent_GetProperties(lua)
+if(NOT lua_POPULATED)
+    FetchContent_Populate(lua)
+    file(GLOB LUA_SOURCES "${lua_SOURCE_DIR}/*.c")
+    list(REMOVE_ITEM LUA_SOURCES "${lua_SOURCE_DIR}/lua.c" "${lua_SOURCE_DIR}/luac.c" "${lua_SOURCE_DIR}/onelua.c")
+    add_library(lua STATIC ${LUA_SOURCES})
+    target_include_directories(lua PUBLIC ${lua_SOURCE_DIR})
+    if(MSVC)
+        target_compile_definitions(lua PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
+endif()
+
 # ---- Target ----
 add_executable(gtps_bot
     src/main.cpp
@@ -65,6 +83,7 @@ add_executable(gtps_bot
     src/world.cpp
     src/bot_actions.cpp
     src/gui.cpp
+    src/lua_engine.cpp
 )
 
 target_include_directories(gtps_bot PRIVATE
@@ -73,9 +92,10 @@ target_include_directories(gtps_bot PRIVATE
     ${httplib_SOURCE_DIR}
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
+    ${lua_SOURCE_DIR}
 )
 
-target_link_libraries(gtps_bot PRIVATE enet imgui)
+target_link_libraries(gtps_bot PRIVATE enet imgui lua)
 
 # OpenSSL untuk HTTPS (opsional)
 find_package(OpenSSL QUIET)

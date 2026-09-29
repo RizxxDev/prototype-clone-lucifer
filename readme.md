@@ -28,8 +28,8 @@ Target jangka panjang project ini adalah membangun bot GTPS yang memiliki kemamp
 | **1** | CLI, HTTP login, ENet connect, kirim/terima paket, auto-warp | ✅ Terverifikasi pada GTPS nyata (CreativePS) |
 | **2** | Parser paket: world tiles, inventory, player tracking, dropped objects | ✅ Selesai (TankPacket 56b & WorldState) |
 | **3** | Action: `move`, `punch`, `place`, `wrench`, `collect`, `drop`, `trash`, `farm` | ✅ Selesai (BotActions & AutoFarm) |
-| **4** | Scripting Lua + API bergaya Lucifer Lua v2.86 | ⏳ Tahap Berikutnya |
-| **5** | Multi-bot, auto-reconnect, proxy | ⏳ Belum |
+| **4** | Scripting Lua + API bergaya Lucifer Lua v2.86 | ✅ Selesai (Lua 5.4 + API Lucifer v2.86 & GUI Editor) |
+| **5** | Multi-bot, auto-reconnect, proxy | ⏳ Tahap Berikutnya |
 | **6** | GUI menggunakan Dear ImGui + DirectX 11 (Native Desktop Window) | ✅ Selesai (Lucifer Desktop Suite) |
 
 > **Status build:** ✅ Terverifikasi & berhasil dibuild di Windows (`build/Release/gtps_bot.exe`).
