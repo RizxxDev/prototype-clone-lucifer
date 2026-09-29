@@ -33,10 +33,9 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_SIZE:
         if (wParam == SIZE_MINIMIZED)
             return 0;
-        // Resize swap chain
         return 0;
     case WM_SYSCOMMAND:
-        if ((wParam & 0xfff0) == SC_KEYMENU) // Disable ALT application menu
+        if ((wParam & 0xfff0) == SC_KEYMENU)
             return 0;
         break;
     case WM_DESTROY:
@@ -53,12 +52,10 @@ LuciferGui::LuciferGui(EnetClient& enet, WorldState& world, BotActions& actions,
       autofarm_(autofarm), lua_engine_(lua_engine), info_(info), running_(running) {
     g_current_gui = this;
 
-    // Inisialisasi buffer dari info akun
     strncpy_s(cfg_account_name_, info_.account_name.c_str(), sizeof(cfg_account_name_) - 1);
     strncpy_s(cfg_server_ip_, info_.game_host.c_str(), sizeof(cfg_server_ip_) - 1);
     cfg_server_port_ = info_.game_port;
 
-    // Default Lua Script Template
     const char* default_script =
         "-- Lucifer Lua Script v2.86\n"
         "-- Tekan tombol [Jalankan Script] di atas untuk mengeksekusi\n\n"
@@ -67,12 +64,10 @@ LuciferGui::LuciferGui(EnetClient& enet, WorldState& world, BotActions& actions,
         "log(\"Nama World: \" .. world.name .. \" (\" .. world.width .. \"x\" .. world.height .. \")\")\n\n"
         "local me = bot:getLocal()\n"
         "log(\"Posisi Bot: Tile (\" .. me.tile_x .. \", \" .. me.tile_y .. \")\")\n\n"
-        "-- Contoh Loop: Pukul tile di depan/bawah bot 4 kali\n"
-        "for i = 1, 4 do\n"
-        "    bot:hit(me.tile_x, me.tile_y + 1)\n"
-        "    sleep(160)\n"
-        "end\n\n"
-        "bot:collect(3.0)\n"
+        "-- Contoh: Bergerak dengan bot\n"
+        "bot:moveTo(me.tile_x + 1, me.tile_y, 40)\n"
+        "sleep(300)\n"
+        "bot:moveTo(me.tile_x, me.tile_y, 40)\n"
         "log(\"✅ Script selesai!\")\n";
     strncpy_s(script_buffer_, default_script, sizeof(script_buffer_) - 1);
 }
@@ -186,7 +181,7 @@ void LuciferGui::applyLuciferTheme() {
     colors[ImGuiCol_CheckMark]             = ImVec4(0.92f, 0.22f, 0.28f, 1.00f);
     colors[ImGuiCol_SliderGrab]            = ImVec4(0.85f, 0.20f, 0.25f, 1.00f);
     colors[ImGuiCol_SliderGrabActive]      = ImVec4(0.95f, 0.25f, 0.30f, 1.00f);
-    colors[ImGuiCol_Button]                = ImVec4(0.75f, 0.18f, 0.22f, 1.00f); // Lucifer Crimson Red
+    colors[ImGuiCol_Button]                = ImVec4(0.75f, 0.18f, 0.22f, 1.00f);
     colors[ImGuiCol_ButtonHovered]         = ImVec4(0.88f, 0.22f, 0.27f, 1.00f);
     colors[ImGuiCol_ButtonActive]          = ImVec4(0.65f, 0.15f, 0.18f, 1.00f);
     colors[ImGuiCol_Header]                = ImVec4(0.75f, 0.18f, 0.22f, 0.40f);
@@ -224,7 +219,6 @@ bool LuciferGui::init(HINSTANCE hInstance, int width, int height) {
 
     if (!hWnd_) return false;
 
-    // Enable Windows 10/11 Dark Titlebar
     BOOL useDarkMode = TRUE;
     ::DwmSetWindowAttribute(hWnd_, DWMWA_USE_IMMERSIVE_DARK_MODE, &useDarkMode, sizeof(useDarkMode));
 
@@ -237,7 +231,6 @@ bool LuciferGui::init(HINSTANCE hInstance, int width, int height) {
     ::ShowWindow(hWnd_, SW_SHOWDEFAULT);
     ::UpdateWindow(hWnd_);
 
-    // Init ImGui
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -276,15 +269,12 @@ void LuciferGui::run() {
         }
         if (!running_) break;
 
-        // Poll ENet packet handling
         enet_.poll();
 
-        // New ImGui Frame
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        // Render Lucifer GUI Suite
         renderTabs();
 
         ImGui::Render();
@@ -292,7 +282,7 @@ void LuciferGui::run() {
         pd3dDeviceContext_->OMSetRenderTargets(1, &mainRenderTargetView_, nullptr);
         pd3dDeviceContext_->ClearRenderTargetView(mainRenderTargetView_, clear_color);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-        pSwapChain_->Present(1, 0); // VSync
+        pSwapChain_->Present(1, 0); // VSync ~60 FPS
     }
 }
 
@@ -311,7 +301,6 @@ void LuciferGui::renderTabs() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 
     if (ImGui::Begin("LuciferMainWindow", nullptr, window_flags)) {
-        // Lucifer Header Banner
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.25f, 0.30f, 1.00f));
         ImGui::Text("🔥 LUCIFER PROTOTYPE");
         ImGui::PopStyleColor();
@@ -337,20 +326,16 @@ void LuciferGui::renderTabs() {
                 renderTabStatus();
                 ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem("🎮 Aksi & Gerak")) {
-                renderTabActions();
+            if (ImGui::BeginTabItem("🚶 Gerak (Movement)")) {
+                renderTabMovement();
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("🎒 Inventory")) {
                 renderTabInventory();
                 ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem("🌍 World & Radar")) {
+            if (ImGui::BeginTabItem("🌍 World & Pemain")) {
                 renderTabWorld();
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("🚜 Auto-Farm")) {
-                renderTabAutoFarm();
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("📜 Script Editor (Lua)")) {
@@ -378,7 +363,7 @@ void LuciferGui::renderTabStatus() {
     world_.getLocalPos(px, py, tx, ty);
     std::string wname = world_.getWorldName();
 
-    ImGui::BeginChild("StatusCard", ImVec2(0, 240), true);
+    ImGui::BeginChild("StatusCard", ImVec2(0, 220), true);
     ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "📊 INFORMASI BOT & KONEKSI");
     ImGui::Separator();
     ImGui::Spacing();
@@ -396,18 +381,17 @@ void LuciferGui::renderTabStatus() {
     ImGui::Text("World Saat Ini : %s", wname.empty() ? "(Belum masuk world)" : wname.c_str());
     ImGui::Text("Posisi Tile    : X: %d, Y: %d", tx, ty);
     ImGui::Text("Posisi Pixel   : X: %.1f, Y: %.1f", px, py);
-    ImGui::Text("Status AutoFarm: %s", autofarm_.isRunning() ? "SEDANG BERJALAN" : "IDLE");
+    ImGui::Text("Status Lua     : %s", lua_engine_.isRunning() ? "SEDANG BERJALAN" : "IDLE");
 
     ImGui::Columns(1);
     ImGui::EndChild();
 
     ImGui::Spacing();
-    ImGui::BeginChild("QuickActionsCard", ImVec2(0, 160), true);
+    ImGui::BeginChild("QuickActionsCard", ImVec2(0, 150), true);
     ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "⚡ QUICK CONTROLS");
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Warp input
     ImGui::SetNextItemWidth(200);
     ImGui::InputText("Nama World", warp_input_, sizeof(warp_input_));
     ImGui::SameLine();
@@ -433,168 +417,132 @@ void LuciferGui::renderTabStatus() {
     ImGui::EndChild();
 }
 
-void LuciferGui::renderTabActions() {
+void LuciferGui::renderTabMovement() {
     float px = 0, py = 0;
     int tx = 0, ty = 0;
     world_.getLocalPos(px, py, tx, ty);
 
-    ImGui::BeginChild("MovementCard", ImVec2(0, 190), true);
-    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "🚶 PERGERAKAN (MOVEMENT)");
+    ImGui::BeginChild("MovementControls", ImVec2(0, 360), true);
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "🚶 KONTROL PERGERAKAN (TANDA PANAH)");
     ImGui::Separator();
     ImGui::Spacing();
 
-    ImGui::Text("Posisi Bot Saat Ini: Tile (%d, %d)", tx, ty);
+    ImGui::Text("Posisi Bot Saat Ini: Tile (%d, %d) | Pixel (%.1f, %.1f)", tx, ty, px, py);
+    ImGui::TextDisabled("Gunakan tombol panah di bawah atau tombol panah pada keyboard (Up, Down, Left, Right).");
     ImGui::Spacing();
 
-    ImGui::SetNextItemWidth(120);
-    ImGui::InputInt("Target Tile X##move", &move_x_);
+    // Step size
+    ImGui::Text("Langkah (Step):");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(120);
-    ImGui::InputInt("Target Tile Y##move", &move_y_);
+    if (ImGui::RadioButton("1 Tile", move_step_ == 1)) move_step_ = 1;
     ImGui::SameLine();
-    if (ImGui::Button("Gerak Halus (Smooth Walk)", ImVec2(180, 0))) {
-        actions_.moveTo(move_x_, move_y_, 35);
-    }
+    if (ImGui::RadioButton("2 Tiles", move_step_ == 2)) move_step_ = 2;
     ImGui::SameLine();
-    if (ImGui::Button("Set Pos Bot ke Sini", ImVec2(150, 0))) {
-        move_x_ = tx;
-        move_y_ = ty;
-    }
-
-    ImGui::EndChild();
+    if (ImGui::RadioButton("3 Tiles", move_step_ == 3)) move_step_ = 3;
+    ImGui::SameLine();
+    if (ImGui::RadioButton("5 Tiles", move_step_ == 5)) move_step_ = 5;
 
     ImGui::Spacing();
-    ImGui::BeginChild("TileActionsCard", ImVec2(0, 230), true);
-    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "🧱 AKSI TILE (PUNCH / PLACE / WRENCH)");
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Punch
-    ImGui::SetNextItemWidth(100);
-    ImGui::InputInt("Tile X##punch", &punch_x_);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(100);
-    ImGui::InputInt("Tile Y##punch", &punch_y_);
-    ImGui::SameLine();
-    if (ImGui::Button("👊 Pukul (Punch Tile)", ImVec2(160, 0))) {
-        actions_.hit(punch_x_, punch_y_);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Pukul Tile Bot", ImVec2(130, 0))) {
-        actions_.hit(tx, ty);
-    }
-
-    ImGui::Spacing();
-    // Place
-    ImGui::SetNextItemWidth(90);
-    ImGui::InputInt("Item ID##place", &place_id_);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(90);
-    ImGui::InputInt("Tile X##place", &place_x_);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(90);
-    ImGui::InputInt("Tile Y##place", &place_y_);
-    ImGui::SameLine();
-    if (ImGui::Button("🧱 Pasang (Place Block)", ImVec2(160, 0))) {
-        actions_.place(static_cast<uint16_t>(place_id_), place_x_, place_y_);
-    }
-
-    ImGui::Spacing();
-    // Wrench
-    ImGui::SetNextItemWidth(100);
-    ImGui::InputInt("Tile X##wrench", &wrench_x_);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(100);
-    ImGui::InputInt("Tile Y##wrench", &wrench_y_);
-    ImGui::SameLine();
-    if (ImGui::Button("🔧 Wrench Tile", ImVec2(160, 0))) {
-        actions_.wrench(wrench_x_, wrench_y_);
-    }
-
-    ImGui::EndChild();
-
-    ImGui::Spacing();
-    ImGui::BeginChild("ChatCard", ImVec2(0, 110), true);
-    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "💬 CHAT IN-GAME");
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    ImGui::SetNextItemWidth(ImGui::GetWindowWidth() - 170);
-    ImGui::InputText("##chatinput", chat_input_, sizeof(chat_input_));
-    ImGui::SameLine();
-    if (ImGui::Button("Kirim Pesan", ImVec2(140, 0))) {
-        if (strlen(chat_input_) > 0) {
-            actions_.say(chat_input_);
-            chat_input_[0] = '\0';
+    // Keyboard Arrow Keys navigation
+    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
+        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
+            actions_.moveTo(tx, ty - move_step_, 25);
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
+            actions_.moveTo(tx, ty + move_step_, 25);
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
+            actions_.moveTo(tx - move_step_, ty, 25);
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
+            actions_.moveTo(tx + move_step_, ty, 25);
         }
     }
+
+    // D-Pad Arrow Buttons Layout
+    float btn_w = 110.0f;
+    float btn_h = 45.0f;
+    float center_x = 220.0f;
+
+    // Up Arrow Button
+    ImGui::SetCursorPosX(center_x);
+    if (ImGui::Button(" ▲ ATAS ", ImVec2(btn_w, btn_h))) {
+        actions_.moveTo(tx, ty - move_step_, 25);
+    }
+
+    ImGui::Spacing();
+
+    // Left, Center, Right Arrow Buttons
+    ImGui::SetCursorPosX(center_x - btn_w - 10.0f);
+    if (ImGui::Button(" ◄ KIRI ", ImVec2(btn_w, btn_h))) {
+        actions_.moveTo(tx - move_step_, ty, 25);
+    }
+    ImGui::SameLine();
+    ImGui::Dummy(ImVec2(btn_w, btn_h)); // Spacer tengah
+    ImGui::SameLine();
+    if (ImGui::Button(" KANAN ► ", ImVec2(btn_w, btn_h))) {
+        actions_.moveTo(tx + move_step_, ty, 25);
+    }
+
+    ImGui::Spacing();
+
+    // Down Arrow Button
+    ImGui::SetCursorPosX(center_x);
+    if (ImGui::Button(" ▼ BAWAH ", ImVec2(btn_w, btn_h))) {
+        actions_.moveTo(tx, ty + move_step_, 25);
+    }
+
     ImGui::EndChild();
 }
 
 void LuciferGui::renderTabInventory() {
     auto inv = world_.getInventory();
-    uint32_t slots = world_.getInventorySlots();
 
-    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "🎒 BACKPACK (%zu / %u SLOTS)", inv.size(), slots);
-    ImGui::SameLine(ImGui::GetWindowWidth() - 360);
+    ImGui::BeginChild("InvTopBar", ImVec2(0, 50), true);
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "🎒 INVENTORY BOT (%zu ITEM DI TAS)", inv.size());
+    ImGui::SameLine(ImGui::GetWindowWidth() - 250);
+    ImGui::SetNextItemWidth(200);
+    ImGui::InputTextWithHint("##invfilter", "Cari Item ID...", inv_filter_, sizeof(inv_filter_));
+    ImGui::EndChild();
 
-    // Drop & Trash quick input
-    ImGui::SetNextItemWidth(70);
-    ImGui::InputInt("ID##drop", &drop_id_);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(60);
-    ImGui::InputInt("Qty##drop", &drop_count_);
-    ImGui::SameLine();
-    if (ImGui::Button("Drop")) {
-        actions_.drop(static_cast<uint16_t>(drop_id_), drop_count_);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Trash")) {
-        actions_.trash(static_cast<uint16_t>(drop_id_), drop_count_);
-    }
-
-    ImGui::Separator();
     ImGui::Spacing();
 
-    if (ImGui::BeginTable("InventoryTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
-        ImGui::TableSetupColumn("Slot #", ImGuiTableColumnFlags_WidthFixed, 60.0f);
-        ImGui::TableSetupColumn("Item ID", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-        ImGui::TableSetupColumn("Jumlah", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-        ImGui::TableSetupColumn("Aksi Cepat", ImGuiTableColumnFlags_WidthStretch);
+    if (ImGui::BeginTable("InventoryTableClean", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+        ImGui::TableSetupColumn("No", ImGuiTableColumnFlags_WidthFixed, 50.0f);
+        ImGui::TableSetupColumn("Item ID", ImGuiTableColumnFlags_WidthFixed, 140.0f);
+        ImGui::TableSetupColumn("Jumlah (Count)", ImGuiTableColumnFlags_WidthFixed, 140.0f);
+        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableHeadersRow();
 
+        std::string filter_str = inv_filter_;
+
+        int display_idx = 1;
         for (size_t i = 0; i < inv.size(); ++i) {
             const auto& item = inv[i];
+
+            std::string id_str = std::to_string(item.id);
+            if (!filter_str.empty() && id_str.find(filter_str) == std::string::npos) {
+                continue;
+            }
+
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
-            ImGui::Text("#%zu", i + 1);
+            ImGui::Text("#%d", display_idx++);
 
             ImGui::TableSetColumnIndex(1);
-            ImGui::Text("%u", item.id);
+            ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.30f, 1.0f), "ID: %u", item.id);
 
             ImGui::TableSetColumnIndex(2);
-            ImGui::Text("x%d", (int)item.count);
+            ImGui::TextColored(ImVec4(0.35f, 0.90f, 0.45f, 1.0f), "x%d", (int)item.count);
 
             ImGui::TableSetColumnIndex(3);
-            ImGui::Text("%s", item.flags ? "Equipped" : "-");
-
-            ImGui::TableSetColumnIndex(4);
-            std::string drop_lbl = "Drop 1##" + std::to_string(i);
-            std::string drop_all_lbl = "Drop All##" + std::to_string(i);
-            std::string farm_lbl = "Pilih ke AutoFarm##" + std::to_string(i);
-
-            if (ImGui::SmallButton(drop_lbl.c_str())) {
-                actions_.drop(item.id, 1);
-            }
-            ImGui::SameLine();
-            if (ImGui::SmallButton(drop_all_lbl.c_str())) {
-                actions_.drop(item.id, item.count);
-            }
-            ImGui::SameLine();
-            if (ImGui::SmallButton(farm_lbl.c_str())) {
-                farm_id_ = item.id;
-                place_id_ = item.id;
+            if (item.flags) {
+                ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "Equipped");
+            } else {
+                ImGui::TextDisabled("Di Tas");
             }
         }
         ImGui::EndTable();
@@ -668,76 +616,9 @@ void LuciferGui::renderTabWorld() {
     ImGui::Columns(1);
 }
 
-void LuciferGui::renderTabAutoFarm() {
-    bool is_farming = autofarm_.isRunning();
-
-    ImGui::BeginChild("AutoFarmControls", ImVec2(0, 260), true);
-    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "🚜 LUCIFER AUTO-FARM ENGINE");
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    ImGui::Columns(2, "FarmCols", false);
-    ImGui::SetColumnWidth(0, 420.0f);
-
-    ImGui::SetNextItemWidth(140);
-    ImGui::InputInt("Item ID Blok / Seed", &farm_id_);
-
-    float px = 0, py = 0;
-    int tx = 0, ty = 0;
-    world_.getLocalPos(px, py, tx, ty);
-
-    ImGui::SetNextItemWidth(100);
-    ImGui::InputInt("Tile X##farm", &farm_x_);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(100);
-    ImGui::InputInt("Tile Y##farm", &farm_y_);
-    ImGui::SameLine();
-    if (ImGui::Button("Gunakan Posisi Bot")) {
-        farm_x_ = tx;
-        farm_y_ = ty + 1; // 1 tile di bawah bot
-    }
-
-    ImGui::SetNextItemWidth(220);
-    ImGui::SliderInt("Delay Aksi (ms)", &farm_delay_, 100, 400);
-
-    ImGui::SetNextItemWidth(220);
-    ImGui::SliderInt("Pukulan per Blok", &farm_hits_, 1, 8);
-
-    ImGui::NextColumn();
-
-    ImGui::Text("Status Mesin Auto-Farm:");
-    if (is_farming) {
-        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.3f, 1.0f), "● AKTIF - SEDANG MEMANEN & MEMASANG");
-        ImGui::Spacing();
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.15f, 0.15f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.25f, 0.25f, 1.0f));
-        if (ImGui::Button("⏹ HENTIKAN AUTO-FARM", ImVec2(240, 50))) {
-            autofarm_.stop();
-        }
-        ImGui::PopStyleColor(2);
-    } else {
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "● NONAKTIF (IDLE)");
-        ImGui::Spacing();
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.75f, 0.25f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.88f, 0.35f, 1.0f));
-        if (ImGui::Button("▶ MULAI AUTO-FARM", ImVec2(240, 50))) {
-            autofarm_.start(static_cast<uint16_t>(farm_id_), farm_x_, farm_y_, farm_delay_, farm_hits_);
-        }
-        ImGui::PopStyleColor(2);
-    }
-
-    int current_stock = world_.getItemCount(static_cast<uint16_t>(farm_id_));
-    ImGui::Spacing();
-    ImGui::Text("Sisa Stok di Backpack: %d item", current_stock);
-
-    ImGui::Columns(1);
-    ImGui::EndChild();
-}
-
 void LuciferGui::renderTabScriptEditor() {
     bool is_running = lua_engine_.isRunning();
 
-    // Top action bar
     ImGui::BeginChild("ScriptTopBar", ImVec2(0, 105), true);
 
     ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "📜 LUCIFER LUA SCRIPT ENGINE v2.86");
@@ -751,7 +632,6 @@ void LuciferGui::renderTabScriptEditor() {
 
     ImGui::Spacing();
 
-    // Run / Stop buttons
     if (is_running) {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.15f, 0.15f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.25f, 0.25f, 1.0f));
@@ -775,19 +655,6 @@ void LuciferGui::renderTabScriptEditor() {
 
     ImGui::SameLine();
     ImGui::TextDisabled("| Template:");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Auto-Punch")) {
-        const char* t =
-            "-- Template: Auto-Punch loop\n"
-            "local me = bot:getLocal()\n"
-            "for i = 1, 10 do\n"
-            "    bot:hit(me.tile_x, me.tile_y + 1)\n"
-            "    sleep(160)\n"
-            "end\n"
-            "bot:collect(4.0)\n"
-            "log(\"Punch loop done!\")\n";
-        strncpy_s(script_buffer_, t, sizeof(script_buffer_) - 1);
-    }
     ImGui::SameLine();
     if (ImGui::SmallButton("Patroli Jalan")) {
         const char* t =
@@ -837,7 +704,6 @@ void LuciferGui::renderTabScriptEditor() {
 
     ImGui::Spacing();
 
-    // Editor Area
     ImGui::BeginChild("ScriptEditorArea", ImVec2(0, 0), false);
     ImGui::InputTextMultiline("##luascriptcode", script_buffer_, sizeof(script_buffer_),
                               ImVec2(-1.0f, -1.0f), ImGuiInputTextFlags_AllowTabInput);
@@ -880,7 +746,6 @@ void LuciferGui::renderTabConsole() {
             }
         }
 
-        // Color coding
         if (line.find("[+]") != std::string::npos || line.find("ONLINE") != std::string::npos) {
             ImGui::TextColored(ImVec4(0.35f, 0.90f, 0.45f, 1.0f), "%s", line.c_str());
         } else if (line.find("[!]") != std::string::npos || line.find("ERROR") != std::string::npos) {

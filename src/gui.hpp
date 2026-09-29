@@ -32,9 +32,9 @@ public:
     ~LuciferGui();
 
     // Inisialisasi window Win32 & DirectX 11 device
-    bool init(HINSTANCE hInstance, int width = 1080, int height = 740);
+    bool init(HINSTANCE hInstance, int width = 1040, int height = 700);
 
-    // Loop render GUI (akan berjalan hingga user menutup window atau running == false)
+    // Loop render GUI
     void run();
 
     // Cleanup resources
@@ -43,10 +43,9 @@ public:
 private:
     void renderTabs();
     void renderTabStatus();
-    void renderTabActions();
+    void renderTabMovement();
     void renderTabInventory();
     void renderTabWorld();
-    void renderTabAutoFarm();
     void renderTabScriptEditor();
     void renderTabConsole();
     void renderTabSettings();
@@ -76,30 +75,16 @@ private:
     BotInfo& info_;
     std::atomic<bool>& running_;
 
-    // UI Input Buffers
+    // Movement (Tanda Panah) Buffers
+    int move_step_ = 1; // 1 tile per click/keypress
+
+    // Navigation & Quick Actions
     char warp_input_[64] = "riziq";
     char chat_input_[256] = "";
-    int move_x_ = 0;
-    int move_y_ = 0;
-    int punch_x_ = 0;
-    int punch_y_ = 0;
-    int place_id_ = 2; // Default Dirt
-    int place_x_ = 0;
-    int place_y_ = 0;
-    int wrench_x_ = 0;
-    int wrench_y_ = 0;
     float collect_radius_ = 4.0f;
-    int drop_id_ = 2;
-    int drop_count_ = 1;
-    int trash_id_ = 2;
-    int trash_count_ = 1;
 
-    // Auto-Farm Buffers
-    int farm_id_ = 2;
-    int farm_x_ = 0;
-    int farm_y_ = 0;
-    int farm_delay_ = 180;
-    int farm_hits_ = 4;
+    // Inventory Buffers
+    char inv_filter_[64] = "";
 
     // Script Editor Buffers
     char script_buffer_[16384]{};

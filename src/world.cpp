@@ -101,27 +101,35 @@ void WorldState::parseRemove(const std::string& remove_str) {
 
 void WorldState::parseInventory(const uint8_t* extra_data, size_t size) {
     std::lock_guard<std::mutex> lock(mtx_);
-    if (size < 8) return;
+    if (size < 10) return;
 
     ByteReader reader(extra_data, size);
-    uint8_t version = reader.u8(); // version
-    uint8_t flags = reader.u8();   // flags
-    (void)version;
-    (void)flags;
+    uint32_t header = reader.u32(); // 1 byte version + 3 bytes padding
+    (void)header;
 
-    inventory_slots_ = reader.u32();
+    uint32_t slots = reader.u32();
     uint16_t item_count = reader.u16();
+    (void)item_count;
+
+    if (slots > 0 && slots <= 300) {
+        inventory_slots_ = slots;
+    } else {
+        inventory_slots_ = 40;
+    }
 
     inventory_.clear();
-    for (uint16_t i = 0; i < item_count && reader.ok() && reader.remaining() >= 4; ++i) {
+    while (reader.ok() && reader.remaining() >= 4) {
         InventoryItem item;
         item.id = reader.u16();
         item.count = reader.u8();
         item.flags = reader.u8();
-        inventory_.push_back(item);
+
+        if (item.id > 0 && item.count > 0 && item.id < 20000) {
+            inventory_.push_back(item);
+        }
     }
 
-    Logger::log("[WORLD] 🎒 Inventory diperbarui: ", inventory_.size(), " item / ", inventory_slots_, " slot.");
+    Logger::log("[WORLD] 🎒 Inventory dimuat: ", inventory_.size(), " item di tas.");
 }
 
 void WorldState::parseMapData(const uint8_t* extra_data, size_t size) {
