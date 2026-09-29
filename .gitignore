@@ -1,0 +1,24 @@
+# Environment & sensitive credentials
+.env
+cookies.txt
+
+# CMake & build outputs
+build/
+bin/
+out/
+*.exe
+*.obj
+*.lib
+*.pdb
+*.ilk
+*.exp
+
+# IDE & Editor files
+.vs/
+.vscode/
+*.sln
+*.vcxproj*
+
+# OS files
+Thumbs.db
+Desktop.ini

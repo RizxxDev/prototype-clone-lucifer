@@ -1,0 +1,62 @@
+cmake_minimum_required(VERSION 3.16)
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "Minimum policy version")
+project(gtps_bot CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_compile_definitions(NOMINMAX)
+
+# ---- Dependencies ----
+include(FetchContent)
+
+# ENet
+FetchContent_Declare(
+    enet
+    GIT_REPOSITORY https://github.com/lsalzman/enet.git
+    GIT_TAG        v1.3.17
+)
+FetchContent_MakeAvailable(enet)
+
+# nlohmann/json (header-only)
+FetchContent_Declare(
+    json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+)
+FetchContent_MakeAvailable(json)
+
+# cpp-httplib (header-only)
+FetchContent_Declare(
+    httplib
+    GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+    GIT_TAG        v0.15.3
+)
+FetchContent_MakeAvailable(httplib)
+
+# ---- Target ----
+add_executable(gtps_bot
+    src/main.cpp
+    src/http_client.cpp
+    src/enet_client.cpp
+    src/cli.cpp
+)
+
+target_include_directories(gtps_bot PRIVATE
+    ${enet_SOURCE_DIR}/include
+    ${json_SOURCE_DIR}/include
+    ${httplib_SOURCE_DIR}
+)
+
+target_link_libraries(gtps_bot PRIVATE enet)
+
+# OpenSSL untuk HTTPS (opsional, kalau GTPS pakai HTTPS)
+find_package(OpenSSL QUIET)
+if(OpenSSL_FOUND)
+    target_link_libraries(gtps_bot PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    target_compile_definitions(gtps_bot PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+endif()
+
+# Windows: ws2_32, winmm, winhttp
+if(WIN32)
+    target_link_libraries(gtps_bot PRIVATE ws2_32 winmm winhttp)
+endif()
