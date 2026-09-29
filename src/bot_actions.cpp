@@ -30,35 +30,41 @@ void BotActions::moveTo(int tile_x, int tile_y, int step_delay_ms) {
     int dy = tile_y - cur_ty;
     int steps = std::max(std::abs(dx), std::abs(dy));
 
-    int net_id = world_.getLocalNetId();
+    if (steps == 0) return;
 
-    if (steps <= 1) {
+    // Client-to-server state packets standar Growtopia selalu memakai net_id = -1
+    const int net_id = -1;
+
+    if (steps <= 1 || step_delay_ms <= 0) {
         uint32_t flags = TankFlags::ON_GROUND;
         if (target_x < cur_x) flags |= TankFlags::FACING_LEFT;
         auto pkt = TankPacketHelper::createState(net_id, target_x, target_y, flags);
         sendTankPacket(pkt);
         world_.setLocalPos(target_x, target_y);
+        Logger::log("[ACTION] 🚶 Bergerak ke tile (", tile_x, ", ", tile_y, ") [Pixel: ", target_x, ", ", target_y, "]");
     } else {
-        // Interpolasi langkah demi langkah agar menyerupai pergerakan alami
-        for (int i = 1; i <= steps; ++i) {
-            float progress = static_cast<float>(i) / static_cast<float>(steps);
-            float step_x = cur_x + (target_x - cur_x) * progress;
-            float step_y = cur_y + (target_y - cur_y) * progress;
+        // Multi-langkah (misal step 2, 3, 5): jalankan di background thread agar TIDAK memblokir ENet poll / GUI
+        std::thread([this, cur_x, cur_y, target_x, target_y, tile_x, tile_y, steps, step_delay_ms, net_id]() {
+            for (int i = 1; i <= steps; ++i) {
+                if (!enet_.isConnected()) break;
+                float progress = static_cast<float>(i) / static_cast<float>(steps);
+                float step_x = cur_x + (target_x - cur_x) * progress;
+                float step_y = cur_y + (target_y - cur_y) * progress;
 
-            uint32_t flags = TankFlags::ON_GROUND;
-            if (target_x < cur_x) flags |= TankFlags::FACING_LEFT;
+                uint32_t flags = TankFlags::ON_GROUND;
+                if (target_x < cur_x) flags |= TankFlags::FACING_LEFT;
 
-            auto pkt = TankPacketHelper::createState(net_id, step_x, step_y, flags);
-            sendTankPacket(pkt);
-            world_.setLocalPos(step_x, step_y);
+                auto pkt = TankPacketHelper::createState(net_id, step_x, step_y, flags);
+                sendTankPacket(pkt);
+                world_.setLocalPos(step_x, step_y);
 
-            if (step_delay_ms > 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(step_delay_ms));
+                if (step_delay_ms > 0 && i < steps) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(step_delay_ms));
+                }
             }
-        }
+            Logger::log("[ACTION] 🚶 Selesai bergerak ke tile (", tile_x, ", ", tile_y, ") [Pixel: ", target_x, ", ", target_y, "]");
+        }).detach();
     }
-
-    Logger::log("[ACTION] 🚶 Bergerak ke tile (", tile_x, ", ", tile_y, ") [Pixel: ", target_x, ", ", target_y, "]");
 }
 
 void BotActions::hit(int tile_x, int tile_y) {

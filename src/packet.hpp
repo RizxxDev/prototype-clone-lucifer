@@ -122,6 +122,8 @@ struct Variant {
     int32_t int_val = 0;
     uint32_t uint_val = 0;
     float float_val = 0.0f;
+    float float_val2 = 0.0f;
+    float float_val3 = 0.0f;
     std::string str_val;
 };
 
@@ -143,11 +145,11 @@ inline std::vector<Variant> parseVariantList(const uint8_t* data, size_t size) {
             v.str_val = reader.str(len);
         } else if (type == 3) { // vec2
             v.float_val = reader.f32();
-            reader.f32();
+            v.float_val2 = reader.f32();
         } else if (type == 4) { // vec3
             v.float_val = reader.f32();
-            reader.f32();
-            reader.f32();
+            v.float_val2 = reader.f32();
+            v.float_val3 = reader.f32();
         } else if (type == 5) { // uint
             v.uint_val = reader.u32();
         } else if (type == 9) { // int

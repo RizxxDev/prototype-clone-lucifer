@@ -41,11 +41,11 @@ enum TankPacketType : uint8_t {
 
 namespace TankFlags {
     constexpr uint32_t NONE          = 0;
-    constexpr uint32_t FACING_LEFT   = 0x2000;
-    constexpr uint32_t ON_GROUND     = 0x20;
-    constexpr uint32_t SWIMMING      = 0x40;
-    constexpr uint32_t JUMPING       = 0x800;
-    constexpr uint32_t FLYING        = 0x1000;
+    constexpr uint32_t FACING_LEFT   = 0x10;   // 16 (0x10 is character facing left)
+    constexpr uint32_t ON_GROUND     = 0x20;   // 32 (0x20 is standing on ground)
+    constexpr uint32_t SWIMMING      = 0x40;   // 64
+    constexpr uint32_t JUMPING       = 0x800;  // 2048
+    constexpr uint32_t FLYING        = 0x1000; // 4096
 }
 
 #pragma pack(push, 1)
@@ -55,7 +55,7 @@ struct GameUpdatePacket {
     uint8_t  count1 = 0;            // Secondary count 1
     uint8_t  count2 = 0;            // Secondary count 2
     int32_t  net_id = -1;           // Player NetID
-    int32_t  target_net_id = -1;    // Target NetID
+    int32_t  target_net_id = 0;     // Target NetID (0 for standard packets)
     uint32_t flags = 0;             // TankFlags bitmask
     float    float_var = 0.0f;      // Variable float (punch rate, etc.)
     int32_t  main_data = 0;         // Item ID / Tile ID / Object ID
@@ -64,8 +64,8 @@ struct GameUpdatePacket {
     float    speed_x = 0.0f;        // X Velocity
     float    speed_y = 0.0f;        // Y Velocity
     float    secondary_padding = 0; // Padding
-    int32_t  int_x = 0;             // Tile X coordinate
-    int32_t  int_y = 0;             // Tile Y coordinate
+    int32_t  int_x = 0;             // Tile X coordinate (0 when walking)
+    int32_t  int_y = 0;             // Tile Y coordinate (0 when walking)
     uint32_t data_size = 0;         // Size of extended payload data
 };
 #pragma pack(pop)
@@ -120,11 +120,15 @@ namespace TankPacketHelper {
         GameUpdatePacket pkt{};
         pkt.type = PACKET_STATE;
         pkt.net_id = net_id;
+        pkt.target_net_id = 0;
+        pkt.flags = flags;
         pkt.pos_x = x;
         pkt.pos_y = y;
-        pkt.int_x = static_cast<int32_t>(x / 32.0f);
-        pkt.int_y = static_cast<int32_t>(y / 32.0f);
-        pkt.flags = flags;
+        pkt.speed_x = 0.0f;
+        pkt.speed_y = 0.0f;
+        pkt.int_x = 0;
+        pkt.int_y = 0;
+        pkt.data_size = 0;
         return pkt;
     }
 

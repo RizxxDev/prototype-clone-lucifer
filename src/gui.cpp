@@ -449,16 +449,16 @@ void LuciferGui::renderTabMovement() {
     // Keyboard Arrow Keys navigation
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
         if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
-            actions_.moveTo(tx, ty - move_step_, 25);
+            actions_.moveTo(tx, ty - move_step_, 120);
         }
         if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
-            actions_.moveTo(tx, ty + move_step_, 25);
+            actions_.moveTo(tx, ty + move_step_, 120);
         }
         if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
-            actions_.moveTo(tx - move_step_, ty, 25);
+            actions_.moveTo(tx - move_step_, ty, 120);
         }
         if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
-            actions_.moveTo(tx + move_step_, ty, 25);
+            actions_.moveTo(tx + move_step_, ty, 120);
         }
     }
 
@@ -470,7 +470,7 @@ void LuciferGui::renderTabMovement() {
     // Up Arrow Button
     ImGui::SetCursorPosX(center_x);
     if (ImGui::Button(" ▲ ATAS ", ImVec2(btn_w, btn_h))) {
-        actions_.moveTo(tx, ty - move_step_, 25);
+        actions_.moveTo(tx, ty - move_step_, 120);
     }
 
     ImGui::Spacing();
@@ -478,13 +478,13 @@ void LuciferGui::renderTabMovement() {
     // Left, Center, Right Arrow Buttons
     ImGui::SetCursorPosX(center_x - btn_w - 10.0f);
     if (ImGui::Button(" ◄ KIRI ", ImVec2(btn_w, btn_h))) {
-        actions_.moveTo(tx - move_step_, ty, 25);
+        actions_.moveTo(tx - move_step_, ty, 120);
     }
     ImGui::SameLine();
     ImGui::Dummy(ImVec2(btn_w, btn_h)); // Spacer tengah
     ImGui::SameLine();
     if (ImGui::Button(" KANAN ► ", ImVec2(btn_w, btn_h))) {
-        actions_.moveTo(tx + move_step_, ty, 25);
+        actions_.moveTo(tx + move_step_, ty, 120);
     }
 
     ImGui::Spacing();
@@ -492,7 +492,7 @@ void LuciferGui::renderTabMovement() {
     // Down Arrow Button
     ImGui::SetCursorPosX(center_x);
     if (ImGui::Button(" ▼ BAWAH ", ImVec2(btn_w, btn_h))) {
-        actions_.moveTo(tx, ty + move_step_, 25);
+        actions_.moveTo(tx, ty + move_step_, 120);
     }
 
     ImGui::EndChild();

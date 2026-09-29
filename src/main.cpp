@@ -299,6 +299,14 @@ int main(int argc, char** argv) {
                             Logger::log("[+] 👤 OnSpawn diterima! Karakter terdaftar di world.");
                             Logger::log("[+] ✅ Akun sekarang ONLINE di dalam game!");
                         }
+                        else if (fn.find("OnSetPos") != std::string::npos) {
+                            if (vars.size() > 1 && vars[1].type == 3) {
+                                float new_x = vars[1].float_val;
+                                float new_y = vars[1].float_val2;
+                                world.setLocalPos(new_x, new_y);
+                                Logger::log("[WORLD] 📍 OnSetPos diterima: Pos=(", new_x, ", ", new_y, ") Tile=(", (int)(new_x / 32.0f), ", ", (int)(new_y / 32.0f), ")");
+                            }
+                        }
                         else if (fn.find("OnRemove") != std::string::npos) {
                             std::string remove_data = vars.size() > 1 ? vars[1].str_val : "";
                             world.parseRemove(remove_data);

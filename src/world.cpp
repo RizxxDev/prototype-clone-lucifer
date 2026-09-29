@@ -73,7 +73,12 @@ void WorldState::parseSpawn(const std::string& spawn_str, const std::string& my_
     std::string clean_pname = stripColorCodes(p.name);
     std::string clean_myname = stripColorCodes(my_name);
 
-    if (is_local_type || (!clean_myname.empty() && clean_pname.find(clean_myname) != std::string::npos)) {
+    std::string p_lower = clean_pname;
+    std::string my_lower = clean_myname;
+    std::transform(p_lower.begin(), p_lower.end(), p_lower.begin(), ::tolower);
+    std::transform(my_lower.begin(), my_lower.end(), my_lower.begin(), ::tolower);
+
+    if (is_local_type || (!my_lower.empty() && p_lower.find(my_lower) != std::string::npos)) {
         p.is_local = true;
         local_player_ = p;
         Logger::log("[WORLD] ⭐ Karakter lokal terdaftar: NetID=", p.net_id, " Nama=", clean_pname, " Pos=(", p.x, ", ", p.y, ")");
