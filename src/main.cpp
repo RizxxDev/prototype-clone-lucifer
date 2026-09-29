@@ -228,6 +228,10 @@ int main(int argc, char** argv) {
                     text.find("Logon authenticated") != std::string::npos) {
                     trigger_enter_game();
                 }
+                if (text.find("action|ping") != std::string::npos || text.find("ping\n") == 0) {
+                    enet.sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT, "action|pong\n");
+                    Logger::log("[ENet] 🏓 Server text ping dijawab dengan action|pong!");
+                }
             }
             else if (pkt.type == GtPacket::NET_MESSAGE_GAME_PACKET) {
                 uint8_t tank_type = pkt.payload.size() > 0 ? pkt.payload[0] : 0;
@@ -420,6 +424,32 @@ int main(int argc, char** argv) {
                             Logger::log("  ⚡ Variant Function: ", fn);
                         }
                     }
+                }
+                // Tank packet 21/22/23: Ping Request / Keepalive from server
+                else if ((tank_type == PACKET_PING_REQUEST || tank_type == 21 || tank_type == 22 || tank_type == 23) && pkt.payload.size() >= sizeof(GameUpdatePacket)) {
+                    GameUpdatePacket ping_in;
+                    std::memcpy(&ping_in, pkt.payload.data(), sizeof(GameUpdatePacket));
+
+                    GameUpdatePacket ping_reply{};
+                    ping_reply.type = PACKET_PING_REPLY; // 21
+                    ping_reply.net_id = world.getLocalNetId();
+                    ping_reply.main_data = ping_in.main_data;
+                    ping_reply.pos_x = 64.0f;
+                    ping_reply.pos_y = 64.0f;
+                    ping_reply.speed_x = 1000.0f;
+                    ping_reply.speed_y = 250.0f;
+                    actions.sendTankPacket(ping_reply);
+
+                    // Kirim juga reply dengan type 22 jika request server bernilai 23
+                    if (tank_type == 23) {
+                        ping_reply.type = 22;
+                        actions.sendTankPacket(ping_reply);
+                    }
+
+                    Logger::log("[ENet] 🏓 PING_REQUEST (type=", (int)tank_type, ") dijawab dengan PING_REPLY!");
+                }
+                else {
+                    Logger::log("[ENet] 📦 Tank Packet tidak tertangani: type=", (int)tank_type, " len=", pkt.payload.size());
                 }
             }
             else if (pkt.type == GtPacket::NET_MESSAGE_ERROR) {

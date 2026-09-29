@@ -32,8 +32,8 @@ void BotActions::moveTo(int tile_x, int tile_y, int step_delay_ms) {
 
     if (steps == 0) return;
 
-    // Client-to-server state packets standar Growtopia selalu memakai net_id = -1
-    const int net_id = -1;
+    int net_id = world_.getLocalNetId();
+    if (net_id < 0) net_id = -1;
 
     if (steps <= 1 || step_delay_ms <= 0) {
         uint32_t flags = TankFlags::ON_GROUND;
