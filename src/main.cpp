@@ -234,6 +234,11 @@ int main(int argc, char** argv) {
                 }
             }
             else if (pkt.type == GtPacket::NET_MESSAGE_GAME_PACKET) {
+                if (pkt.payload.size() >= sizeof(GameUpdatePacket)) {
+                    GameUpdatePacket tank_update{};
+                    std::memcpy(&tank_update, pkt.payload.data(), sizeof(GameUpdatePacket));
+                    lua_engine.triggerOnProcessTankUpdate(tank_update);
+                }
                 uint8_t tank_type = pkt.payload.size() > 0 ? pkt.payload[0] : 0;
 
                 // Tank packet 0: PACKET_STATE (Player Movement / Pos)
@@ -273,9 +278,17 @@ int main(int argc, char** argv) {
                 }
                 // Tank packet 1: PACKET_CALL_FUNCTION (VariantList)
                 else if (tank_type == PACKET_CALL_FUNCTION && pkt.payload.size() >= sizeof(GameUpdatePacket)) {
+                    GameUpdatePacket call_pkt{};
+                    std::memcpy(&call_pkt, pkt.payload.data(), sizeof(GameUpdatePacket));
+
                     auto vars = parseVariantList(pkt.payload.data() + sizeof(GameUpdatePacket),
                                                  pkt.payload.size() - sizeof(GameUpdatePacket));
                     if (!vars.empty()) {
+                        // Dispatch ke Bothax Lua hook OnVariant
+                        if (lua_engine.triggerOnVariant(vars, call_pkt.net_id, static_cast<int>(call_pkt.float_var))) {
+                            return; // Diblokir oleh script Lua
+                        }
+
                         std::string fn = vars[0].str_val;
 
                         auto get_vint = [](const Variant& v) -> int {

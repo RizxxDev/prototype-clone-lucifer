@@ -277,6 +277,9 @@ void LuciferGui::run() {
 
         renderTabs();
 
+        // Trigger Bothax Lua OnDraw hook
+        lua_engine_.triggerOnDraw(ImGui::GetIO().DeltaTime);
+
         ImGui::Render();
         const float clear_color[4] = { 0.08f, 0.09f, 0.12f, 1.00f };
         pd3dDeviceContext_->OMSetRenderTargets(1, &mainRenderTargetView_, nullptr);
@@ -619,9 +622,9 @@ void LuciferGui::renderTabWorld() {
 void LuciferGui::renderTabScriptEditor() {
     bool is_running = lua_engine_.isRunning();
 
-    ImGui::BeginChild("ScriptTopBar", ImVec2(0, 105), true);
+    ImGui::BeginChild("ScriptTopBar", ImVec2(0, 140), true);
 
-    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "📜 LUCIFER LUA SCRIPT ENGINE v2.86");
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "📜 SCRIPT ENGINE (Bothax Lua Docs & Lucifer v2.86 Supported)");
     ImGui::SameLine();
     if (is_running) {
         float elapsed_sec = lua_engine_.getExecutionTimeMs() / 1000.0f;
@@ -654,11 +657,81 @@ void LuciferGui::renderTabScriptEditor() {
     }
 
     ImGui::SameLine();
-    ImGui::TextDisabled("| Template:");
+    ImGui::TextDisabled("| Bothax:");
     ImGui::SameLine();
-    if (ImGui::SmallButton("Patroli Jalan")) {
+    if (ImGui::SmallButton("Block Dialog")) {
         const char* t =
-            "-- Template: Walk Patrol\n"
+            "-- Bothax Hook: Block Dialog & Log\n"
+            "AddHook('OnVariant', 'BlockDialog', function(var, netid, delay)\n"
+            "    if var[0] == 'OnDialogRequest' then\n"
+            "        LogToConsole('🛑 Blocked Dialog from NetID: ' .. tostring(netid))\n"
+            "        return true\n"
+            "    end\n"
+            "end)\n"
+            "LogToConsole('Bothax Dialog Blocker Hook Aktif!')\n";
+        strncpy_s(script_buffer_, t, sizeof(script_buffer_) - 1);
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Scan Tas")) {
+        const char* t =
+            "-- Bothax: Scan Inventory\n"
+            "local inv = GetInventory()\n"
+            "LogToConsole('🎒 Total item di tas: ' .. #inv)\n"
+            "for _, itm in pairs(inv) do\n"
+            "    local info = GetItemByIDSafe(itm.id)\n"
+            "    LogToConsole('Item ID: ' .. itm.id .. ' (' .. info.name .. ') x' .. itm.amount .. ' [Flags: ' .. itm.flags .. ']')\n"
+            "end\n";
+        strncpy_s(script_buffer_, t, sizeof(script_buffer_) - 1);
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("World & Player")) {
+        const char* t =
+            "-- Bothax: Scan World & Players\n"
+            "local w = GetWorld()\n"
+            "LogToConsole('🌍 World: ' .. w.name .. ' (' .. w.width .. 'x' .. w.height .. ')')\n"
+            "local me = GetLocal()\n"
+            "LogToConsole('👤 Local Bot: ' .. me.name .. ' di (' .. me.tile_x .. ', ' .. me.tile_y .. ')')\n"
+            "local plrs = GetPlayerList()\n"
+            "LogToConsole('👥 Pemain lain di world: ' .. #plrs)\n"
+            "for _, p in pairs(plrs) do\n"
+            "    LogToConsole(' - ' .. p.name .. ' di (' .. (p.pos.x // 32) .. ', ' .. (p.pos.y // 32) .. ')')\n"
+            "end\n";
+        strncpy_s(script_buffer_, t, sizeof(script_buffer_) - 1);
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Cari WL")) {
+        const char* t =
+            "-- Bothax: Scan World Locks (GetTiles)\n"
+            "local tiles = GetTiles()\n"
+            "LogToConsole('Total tiles loaded: ' .. #tiles)\n"
+            "for _, tile in pairs(tiles) do\n"
+            "    if tile.fg == 242 then\n"
+            "        LogToConsole('Found World Lock at (' .. (tile.pos.x // 32) .. ', ' .. (tile.pos.y // 32) .. ')')\n"
+            "    end\n"
+            "end\n";
+        strncpy_s(script_buffer_, t, sizeof(script_buffer_) - 1);
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("HTTP Request")) {
+        const char* t =
+            "-- Bothax: HTTP MakeRequest\n"
+            "local res = MakeRequest('https://growtopiagame.com/detail', 'GET')\n"
+            "LogToConsole('HTTP Status: ' .. res.status)\n"
+            "local online = res.content:match('\"online_user\":\"(%d+)\"')\n"
+            "if online then\n"
+            "    LogToConsole('Current User Online: ' .. online)\n"
+            "else\n"
+            "    LogToConsole('Response Content Length: ' .. #res.content)\n"
+            "end\n";
+        strncpy_s(script_buffer_, t, sizeof(script_buffer_) - 1);
+    }
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("Lucifer Templates:");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Lucifer: Patrol")) {
+        const char* t =
+            "-- Template: Walk Patrol (Lucifer API)\n"
             "local me = bot:getLocal()\n"
             "log(\"Start Patrol from \" .. me.tile_x)\n"
             "bot:moveTo(me.tile_x + 3, me.tile_y, 40)\n"
@@ -668,28 +741,12 @@ void LuciferGui::renderTabScriptEditor() {
         strncpy_s(script_buffer_, t, sizeof(script_buffer_) - 1);
     }
     ImGui::SameLine();
-    if (ImGui::SmallButton("Spam Chat")) {
+    if (ImGui::SmallButton("Lucifer: Spam Chat")) {
         const char* t =
             "-- Template: Spam Chat\n"
             "for i = 1, 3 do\n"
             "    bot:say(\"Hello from Lucifer Lua Bot! #\" .. i)\n"
             "    sleep(1000)\n"
-            "end\n";
-        strncpy_s(script_buffer_, t, sizeof(script_buffer_) - 1);
-    }
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Cek Tas & Pemain")) {
-        const char* t =
-            "-- Template: Inventory & Player Scanner\n"
-            "local inv = bot:getInventory()\n"
-            "log(\"Total item di tas: \" .. #inv)\n"
-            "for i, item in ipairs(inv) do\n"
-            "    log(\"  Item ID: \" .. item.id .. \" x\" .. item.count)\n"
-            "end\n"
-            "local players = bot:getPlayers()\n"
-            "log(\"Total pemain di world: \" .. #players)\n"
-            "for i, p in ipairs(players) do\n"
-            "    log(\"  Pemain: \" .. p.name .. \" (NetID: \" .. p.net_id .. \")\")\n"
             "end\n";
         strncpy_s(script_buffer_, t, sizeof(script_buffer_) - 1);
     }
@@ -703,6 +760,25 @@ void LuciferGui::renderTabScriptEditor() {
     ImGui::EndChild();
 
     ImGui::Spacing();
+
+    if (ImGui::CollapsingHeader("📖 Referensi Cepat Bothax Lua API & Structures")) {
+        ImGui::BeginChild("BothaxDocsRef", ImVec2(0, 140), true);
+        ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.30f, 1.0f), "Fungsi Bothax Utama:");
+        ImGui::BulletText("GetLocal() -> NetAvatar { pos={x,y}, name, netid, userid, country, isleft, tile_x, tile_y }");
+        ImGui::BulletText("GetWorld() -> World { name, width, height, tilecount, objectcount, lastoid }");
+        ImGui::BulletText("GetInventory() -> Inventory[] { id, amount, flags }");
+        ImGui::BulletText("GetTile(x, y) / GetTiles() -> Tile[] { fg, bg, collidable, x, y, pos={x,y}, coltype, flags, extra }");
+        ImGui::BulletText("GetObjectList() -> WorldObject[] { id, pos={x,y}, amount, flags, oid }");
+        ImGui::BulletText("GetPlayerList() -> NetAvatar[] | GetPlayer(netid) -> NetAvatar");
+        ImGui::BulletText("GetCamera() -> WorldCamera | GetClient() -> ENetClient { address, port, ping }");
+        ImGui::BulletText("FindPath(x, y) | CheckPath(x, y) -> boolean");
+        ImGui::BulletText("SendPacket(type, text) | SendPacketRaw(to_client, packet) | SendVariantList(var, netid, delay)");
+        ImGui::BulletText("AddHook(BothaxHook, label, callback) | RemoveHook(label) | RemoveHooks()");
+        ImGui::BulletText("Hooks: 'OnVariant', 'OnSendPacket', 'OnSendPacketRaw', 'OnProcessTankUpdate', 'OnWorldTouch', 'OnDraw', 'OnInput'");
+        ImGui::BulletText("Sleep(ms) | LogToConsole(str) | MakeRequest(url, method) | Hash32/64 | Encrypt/LoadEncrypt");
+        ImGui::EndChild();
+        ImGui::Spacing();
+    }
 
     ImGui::BeginChild("ScriptEditorArea", ImVec2(0, 0), false);
     ImGui::InputTextMultiline("##luascriptcode", script_buffer_, sizeof(script_buffer_),

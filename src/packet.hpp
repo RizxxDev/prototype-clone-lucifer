@@ -159,3 +159,30 @@ inline std::vector<Variant> parseVariantList(const uint8_t* data, size_t size) {
     }
     return vars;
 }
+
+inline std::vector<uint8_t> serializeVariantList(const std::vector<Variant>& vars) {
+    ByteWriter writer;
+    writer.u8(static_cast<uint8_t>(vars.size()));
+    for (size_t i = 0; i < vars.size(); ++i) {
+        writer.u8(static_cast<uint8_t>(i));
+        writer.u8(vars[i].type);
+        if (vars[i].type == 1) { // float
+            writer.f32(vars[i].float_val);
+        } else if (vars[i].type == 2) { // string
+            writer.u32(static_cast<uint32_t>(vars[i].str_val.size()));
+            writer.str(vars[i].str_val);
+        } else if (vars[i].type == 3) { // vec2
+            writer.f32(vars[i].float_val);
+            writer.f32(vars[i].float_val2);
+        } else if (vars[i].type == 4) { // vec3
+            writer.f32(vars[i].float_val);
+            writer.f32(vars[i].float_val2);
+            writer.f32(vars[i].float_val3);
+        } else if (vars[i].type == 5) { // uint
+            writer.u32(vars[i].uint_val);
+        } else if (vars[i].type == 9) { // int
+            writer.i32(vars[i].int_val);
+        }
+    }
+    return writer.buf;
+}

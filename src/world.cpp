@@ -272,6 +272,16 @@ bool WorldState::getTile(int x, int y, uint16_t& out_fg, uint16_t& out_bg) {
     return false;
 }
 
+std::vector<Tile> WorldState::getAllTiles() {
+    std::lock_guard<std::mutex> lock(mtx_);
+    return tiles_;
+}
+
+Player WorldState::getLocalPlayer() {
+    std::lock_guard<std::mutex> lock(mtx_);
+    return local_player_;
+}
+
 std::vector<Player> WorldState::getPlayers() {
     std::lock_guard<std::mutex> lock(mtx_);
     std::vector<Player> result;

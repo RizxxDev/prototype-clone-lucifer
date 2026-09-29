@@ -65,6 +65,8 @@ public:
     int getWidth();
     int getHeight();
     bool getTile(int x, int y, uint16_t& out_fg, uint16_t& out_bg);
+    std::vector<Tile> getAllTiles();
+    Player getLocalPlayer();
     std::vector<Player> getPlayers();
     std::vector<InventoryItem> getInventory();
     std::vector<DroppedItem> getDroppedItems();

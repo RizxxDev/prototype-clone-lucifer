@@ -49,6 +49,9 @@ public:
     // Getter
     ENetHost* host() { return host_; }
     ENetPeer* peer() { return peer_; }
+    std::string getHost() const { return server_host_; }
+    int getPort() const { return server_port_; }
+    int getPing() const { return peer_ ? static_cast<int>(peer_->roundTripTime) : 0; }
 
 private:
     ENetHost* host_ = nullptr;
