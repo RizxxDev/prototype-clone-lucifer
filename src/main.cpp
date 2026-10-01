@@ -159,15 +159,19 @@ int main(int argc, char** argv) {
 
         auto build_handshake = [&](const std::string& meta_str, int user_id = 0, int token = 0, const std::string& door_id = "", int lmode = -1) -> std::string {
             std::string hs;
-            if (!acc_name.empty() && !acc_pass.empty()) {
+            if (!acc_name.empty()) {
                 hs += "tankIDName|" + acc_name + "\n";
-                hs += "tankIDPass|" + acc_pass + "\n";
-                hs += "f|1\n";
+                if (!acc_pass.empty()) {
+                    hs += "tankIDPass|" + acc_pass + "\n";
+                    hs += "f|1\n";
+                } else if (!login_resp.token.empty()) {
+                    hs += "ltoken|" + login_resp.token + "\n";
+                    hs += "f|0\n";
+                } else {
+                    hs += "f|0\n";
+                }
             } else {
                 hs += "f|0\n";
-            }
-            if (!login_resp.token.empty()) {
-                hs += "ltoken|" + login_resp.token + "\n";
             }
             hs += "requestedName|" + (acc_name.empty() ? "GuestBot" : acc_name) + "\n";
             hs += "protocol|" + std::to_string(protocol) + "\n";

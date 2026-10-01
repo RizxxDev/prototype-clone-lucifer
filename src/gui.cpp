@@ -726,7 +726,8 @@ void LuciferGui::renderCardBotInfo(float w, float h) {
     std::shared_ptr<BotInstance> bot = (bot_manager_ && selected_bot_id_ > 0)
         ? bot_manager_->getBotById(selected_bot_id_) : nullptr;
 
-    bool is_online = bot ? bot->isOnline() : enet_.isConnected();
+    bool is_in_world = bot ? bot->isOnline() : (!world_.getWorldName().empty() && enet_.isConnected());
+    bool is_connected = bot ? bot->isConnected() : enet_.isConnected();
     int ping = bot ? bot->getPing() : enet_.getPing();
     float px = 0, py = 0;
     int tx = 0, ty = 0;
@@ -751,8 +752,12 @@ void LuciferGui::renderCardBotInfo(float w, float h) {
     // 1. Status: Online [37?]
     ImGui::Text("Status: ");
     ImGui::SameLine();
-    if (is_online) {
-        ImGui::TextColored(ImVec4(0.18f, 0.95f, 0.40f, 1.0f), "Online");
+    if (is_in_world) {
+        ImGui::TextColored(ImVec4(0.18f, 0.95f, 0.40f, 1.0f), "Online (In World)");
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.85f, 0.25f, 0.25f, 1.0f), " [%d]", ping > 0 ? ping : 37);
+    } else if (is_connected) {
+        ImGui::TextColored(ImVec4(0.20f, 0.75f, 1.0f, 1.0f), "Online (Lobby)");
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(0.85f, 0.25f, 0.25f, 1.0f), " [%d]", ping > 0 ? ping : 37);
     } else {

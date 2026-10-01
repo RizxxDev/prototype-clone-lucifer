@@ -37,15 +37,19 @@ BotInstance::~BotInstance() {
 std::string BotInstance::buildHandshake(const std::string& meta_str, int user_id, int token,
                                        const std::string& door_id, int lmode) {
     std::string hs;
-    if (!account_name_.empty() && !password_.empty()) {
+    if (!account_name_.empty()) {
         hs += "tankIDName|" + account_name_ + "\n";
-        hs += "tankIDPass|" + password_ + "\n";
-        hs += "f|1\n";
+        if (!password_.empty()) {
+            hs += "tankIDPass|" + password_ + "\n";
+            hs += "f|1\n";
+        } else if (!cached_token_.empty()) {
+            hs += "ltoken|" + cached_token_ + "\n";
+            hs += "f|0\n";
+        } else {
+            hs += "f|0\n";
+        }
     } else {
         hs += "f|0\n";
-    }
-    if (!cached_token_.empty()) {
-        hs += "ltoken|" + cached_token_ + "\n";
     }
     hs += "requestedName|" + (account_name_.empty() ? "GuestBot" : account_name_) + "\n";
     hs += "protocol|" + std::to_string(protocol) + "\n";
