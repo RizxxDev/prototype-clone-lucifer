@@ -15,7 +15,8 @@ Dokumen ini merinci status implementasi proyek saat ini, riwayat masalah teknis 
 | **Fase 5.1** | Sistem Multi-Bot Berbasis `ThreadPool` & Isolasi `BotInstance` | ✅ Selesai | [`src/thread_pool.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/thread_pool.hpp), [`src/bot_instance.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_instance.hpp), [`src/bot_manager.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_manager.hpp) |
 | **Fase 5.2** | Klien Proxy SOCKS5 (RFC 1928 / RFC 1929 No-Auth & User/Pass) | ✅ Selesai | [`src/socks5.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/socks5.hpp), [`src/socks5.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/socks5.cpp) |
 | **Fase 5.3** | Kontroler Auto-Reconnect Finite State Machine dengan Exponential Backoff & Jitter | ✅ Selesai | [`src/reconnect_controller.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/reconnect_controller.hpp), [`src/reconnect_controller.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/reconnect_controller.cpp) |
-| **Fase 5.4** | Generator Hardware Fingerprint Persisten (`.fingerprints/`) & Human Delay Jitter | ✅ Selesai | [`src/anti_detection.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/anti_detection.hpp), [`src/anti_detection.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/anti_detection.cpp) |
+| **Fase 5.4** | Generator Hardware Fingerprint Persisten (`cache/fingerprints/`) & Human Delay Jitter | ✅ Selesai | [`src/anti_detection.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/anti_detection.hpp), [`src/anti_detection.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/anti_detection.cpp) |
+| **Fase 5.5** | Sistem Direktori Terpadu `cache/` (Fingerprints, `accounts.txt`, `items.dat` Parser & Auto-Sync) | ✅ Selesai | [`src/item_database.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/item_database.hpp), [`src/item_database.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/item_database.cpp) |
 
 ---
 

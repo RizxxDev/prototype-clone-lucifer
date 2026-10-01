@@ -44,6 +44,8 @@ public:
     // Getters & Status
     int getId() const { return id_; }
     std::string getAccountName() const { return account_name_; }
+    std::string getPassword() const { return password_; }
+    void setPassword(const std::string& p) { password_ = p; }
     std::string getTargetWorld() const { return target_world_; }
     void setTargetWorld(const std::string& tw) { target_world_ = tw; }
     std::string getStatusString() const;

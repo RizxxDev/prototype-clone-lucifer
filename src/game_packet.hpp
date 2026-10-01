@@ -25,6 +25,7 @@ enum TankPacketType : uint8_t {
     PACKET_SEND_PLAYER_TRIBUTE_DATA        = 12,
     PACKET_SET_ICON_STATE                  = 13,
     PACKET_ITEM_EFFECT                     = 14,
+    PACKET_SEND_ITEM_DATABASE_DATA         = 16,
     PACKET_SET_CHARACTER_STATE             = 20,
     PACKET_PING_REPLY                      = 21,
     PACKET_PING_REQUEST                    = 22,

@@ -10,6 +10,7 @@
 #include "reconnect_controller.hpp"
 #include "socks5.hpp"
 #include "bot_manager.hpp"
+#include "item_database.hpp"
 
 #include "imgui.h"
 #include "imgui_impl_win32.h"
@@ -285,6 +286,10 @@ bool LuciferGui::init(HINSTANCE hInstance, int width, int height) {
 }
 
 void LuciferGui::shutdown() {
+    if (bot_manager_) {
+        bot_manager_->saveAccountsToFile(accounts_file_path_);
+    }
+
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
@@ -664,6 +669,7 @@ void LuciferGui::renderSidebar(float width, float height) {
     if (ImGui::Button("Remove Bot", ImVec2(-1, 22.0f))) {
         if (bot_manager_ && selected_bot_id_ > 0) {
             bot_manager_->removeBot(selected_bot_id_);
+            bot_manager_->saveAccountsToFile(accounts_file_path_);
             auto remaining = bot_manager_->getBots();
             if (!remaining.empty()) selected_bot_id_ = remaining[0]->getId();
             else selected_bot_id_ = 0;
@@ -683,6 +689,7 @@ void LuciferGui::renderSidebar(float width, float height) {
             if (strlen(new_bot_user_) > 0 && bot_manager_) {
                 auto b = bot_manager_->addBot(new_bot_user_, new_bot_pass_, new_bot_world_);
                 if (b) selected_bot_id_ = b->getId();
+                bot_manager_->saveAccountsToFile(accounts_file_path_);
                 new_bot_user_[0] = '\0';
                 new_bot_pass_[0] = '\0';
                 new_bot_world_[0] = '\0';
@@ -1038,61 +1045,54 @@ void LuciferGui::renderTabSwitch() {
 
 void LuciferGui::renderTabDatabase() {
     ImGui::BeginChild("DatabaseCard", ImVec2(0, 0), true);
-    ImGui::TextColored(ImVec4(0.85f, 0.95f, 1.0f, 1.0f), "🗄️ Growtopia Items Database Cache");
+    auto& db = ItemDatabase::instance();
+    ImGui::TextColored(ImVec4(0.85f, 0.95f, 1.0f, 1.0f), "🗄️ Growtopia Items Database Cache (cache/items.dat)");
+    ImGui::SameLine();
+    if (db.isLoaded()) {
+        ImGui::TextColored(ImVec4(0.25f, 0.95f, 0.35f, 1.0f), "[ %zu items loaded from %s ]", db.getItemCount(), db.getLoadedPath().c_str());
+    } else {
+        ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.25f, 1.0f), "[ %zu builtin items | Menunggu items.dat dari server ]", db.getItemCount());
+    }
     ImGui::Separator();
     ImGui::Spacing();
 
     static char search_item[64] = "";
     ImGui::SetNextItemWidth(300.0f);
     ImGui::InputTextWithHint("##ItemSearch", "Search item name or ID...", search_item, sizeof(search_item));
+    ImGui::SameLine();
+    if (ImGui::Button("🔄 Reload cache/items.dat")) {
+        db.loadFromFile("cache/items.dat");
+    }
 
     ImGui::Spacing();
-    struct ItemEntry { int id; const char* name; const char* type; int grow_sec; int rarity; };
-    static const ItemEntry sample_db[] = {
-        { 2, "Dirt", "Block", 31, 1 },
-        { 3, "Dirt Seed", "Seed", 31, 1 },
-        { 4, "Granite", "Block", 100, 2 },
-        { 5, "Granite Seed", "Seed", 100, 2 },
-        { 8, "Bedrock", "Block", 0, 999 },
-        { 18, "Wooden Platform", "Platform", 60, 2 },
-        { 26, "Door", "Door", 120, 2 },
-        { 32, "Rock Background", "Background", 45, 1 },
-        { 242, "World Lock", "Lock", 0, 100 },
-        { 456, "Laser Grid", "Farmable Block", 345600, 48 },
-        { 5666, "Pepper Tree", "Farmable Seed", 259200, 40 },
-        { 8270, "Chand", "Farmable Block", 604800, 75 }
-    };
 
-    if (ImGui::BeginTable("ItemDbTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+    auto matched = db.findItems(search_item, 500);
+
+    if (ImGui::BeginTable("ItemDbTable", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
         ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 60.0f);
         ImGui::TableSetupColumn("Item Name", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 140.0f);
         ImGui::TableSetupColumn("Grow Time", ImGuiTableColumnFlags_WidthFixed, 100.0f);
         ImGui::TableSetupColumn("Rarity", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+        ImGui::TableSetupColumn("Hits", ImGuiTableColumnFlags_WidthFixed, 60.0f);
         ImGui::TableHeadersRow();
 
-        for (const auto& itm : sample_db) {
-            if (strlen(search_item) > 0) {
-                std::string s = search_item;
-                std::string n = itm.name;
-                std::string id_s = std::to_string(itm.id);
-                std::transform(s.begin(), s.end(), s.begin(), ::tolower);
-                std::transform(n.begin(), n.end(), n.begin(), ::tolower);
-                if (n.find(s) == std::string::npos && id_s.find(s) == std::string::npos) continue;
-            }
-
+        for (const auto& itm : matched) {
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
             ImGui::Text("%d", itm.id);
             ImGui::TableSetColumnIndex(1);
-            ImGui::TextColored(ImVec4(0.20f, 0.95f, 0.45f, 1.0f), "%s", itm.name);
+            ImGui::TextColored(ImVec4(0.20f, 0.95f, 0.45f, 1.0f), "%s", itm.name.c_str());
             ImGui::TableSetColumnIndex(2);
-            ImGui::Text("%s", itm.type);
+            ImGui::Text("%s", itm.type.c_str());
             ImGui::TableSetColumnIndex(3);
-            if (itm.grow_sec > 0) ImGui::Text("%ds", itm.grow_sec);
+            if (itm.grow_time > 0) ImGui::Text("%ds", itm.grow_time);
             else ImGui::TextDisabled("-");
             ImGui::TableSetColumnIndex(4);
             ImGui::Text("%d", itm.rarity);
+            ImGui::TableSetColumnIndex(5);
+            if (itm.break_hits > 0) ImGui::Text("%d", itm.break_hits);
+            else ImGui::TextDisabled("-");
         }
         ImGui::EndTable();
     }
@@ -1364,6 +1364,7 @@ void LuciferGui::renderTabMultiBot() {
                 pcfg.password = new_bot_proxy_pass_;
             }
             bot_manager_->addBot(new_bot_user_, new_bot_pass_, new_bot_world_, pcfg);
+            bot_manager_->saveAccountsToFile(accounts_file_path_);
             new_bot_user_[0] = '\0';
             new_bot_pass_[0] = '\0';
         }
@@ -1455,6 +1456,7 @@ void LuciferGui::renderTabMultiBot() {
             ImGui::SameLine();
             if (ImGui::SmallButton(del_lbl.c_str())) {
                 bot_manager_->removeBot(b->getId());
+                bot_manager_->saveAccountsToFile(accounts_file_path_);
             }
         }
         ImGui::EndTable();
@@ -1720,11 +1722,11 @@ void LuciferGui::renderTabAntiDetection() {
 
     if (ImGui::Button("🎲 Acak Ulang Fingerprint (Regenerate)", ImVec2(300, 32))) {
         fingerprint_ = DeviceFingerprint::generateRandom(fingerprint_.country);
-        fingerprint_.saveToFile(".fingerprints/" + info_.account_name + ".json");
+        fingerprint_.saveToFile("cache/fingerprints/" + info_.account_name + ".json");
         Logger::log("[FINGERPRINT] 🎲 Fingerprint diacak ulang untuk akun ", info_.account_name);
         Logger::log("              MAC: ", fingerprint_.mac, " | RID: ", fingerprint_.rid.substr(0, 8), "...");
     }
-    ImGui::TextDisabled("Catatan: Fingerprint baru akan otomatis tersimpan di .fingerprints/");
+    ImGui::TextDisabled("Catatan: Fingerprint baru akan otomatis tersimpan di cache/fingerprints/");
 
     ImGui::EndChild();
 

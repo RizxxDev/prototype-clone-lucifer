@@ -3,6 +3,7 @@
 cookies.txt
 accounts.txt
 .fingerprints/
+cache/
 
 # CMake & build outputs
 build/

@@ -269,3 +269,32 @@ Ketika web host mengalami *downtime*, rate limiting, atau packet loss:
 2. **Graceful Fallback**: Jika `server_data.php` sewaktu-waktu timeout (misalnya saat reconnect setelah server reboot), bot otomatis menggunakan data cache game server terakhir daripada jatuh ke host web yang mati.
 3. **Konfigurasi Default .env**: Parameter `GTPS_GAME_SERVER` dan `GTPS_GAME_PORT` diarahkan langsung ke game host aktif (`51.79.162.77:17013`) sebagai jaring pengaman awal.
 
+---
+
+## 7. Sistem Direktori Terpadu `cache/` (Storage Architecture)
+
+Saat aplikasi pertama kali dijalankan, sistem otomatis membuat dan mengelola struktur folder `cache/`:
+
+```
+cache/
+├── accounts.txt          # Kredensial akun bot dari GUI (GrowID:Pass:World:Proxy)
+├── items.dat             # Database biner item Growtopia (diunduh dari server / lokal)
+└── fingerprints/         # Profil isolasi hardware identitas perangkat per-akun
+    ├── default.json
+    └── <GrowID>.json
+```
+
+### Komponen Cache:
+1. **`cache/fingerprints/`**:
+   - Menyimpan token `mac`, `rid`, `wk`, `hash`, `fhash`, `fz`, `zf` untuk setiap akun bot secara terisolasi.
+   - Dilengkapi sistem migrasi otomatis dari folder legacy `.fingerprints/` bila ditemukan profil lama.
+2. **`cache/accounts.txt`**:
+   - Tempat penyimpanan kredensial akun yang dimasukkan melalui antarmuka GUI (modal *+ Add Bot* / panel *List*).
+   - **Auto-Sync**: Kredensial otomatis tersimpan setiap kali bot ditambahkan, dihapus, atau saat aplikasi ditutup (`LuciferGui::shutdown()`).
+   - Pada startup, aplikasi langsung memuat akun dari `cache/accounts.txt` tanpa mengharuskan input manual.
+3. **`cache/items.dat`**:
+   - Dikelola oleh modul singleton [`ItemDatabase`](file:///c:/Users/RIZIQ/Documents/testtt/src/item_database.hpp).
+   - **Auto-Download**: Ketika server mengirim paket tank tipe 16 (`PACKET_SEND_ITEM_DATABASE_DATA`), byte mentah langsung disimpan ke `cache/items.dat` dan didekripsi menggunakan sandi cipher Growtopia (`PBGHF892FASDLFDND`).
+   - Terintegrasi dengan tab GUI `[ 🗄️ Database ]` untuk live searching ribuan item, waktu panen, rarity, dan hit points.
+
+

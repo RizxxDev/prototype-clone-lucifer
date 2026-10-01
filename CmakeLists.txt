@@ -89,6 +89,7 @@ add_executable(gtps_bot
     src/socks5.cpp
     src/bot_instance.cpp
     src/bot_manager.cpp
+    src/item_database.cpp
 )
 
 target_include_directories(gtps_bot PRIVATE

@@ -25,7 +25,7 @@ struct DeviceFingerprint {
 
     // Dapatkan fingerprint tersimpan untuk akun ini, atau buat baru dan simpan
     static DeviceFingerprint getOrCreateForAccount(const std::string& account_name,
-                                                  const std::string& cache_dir = ".fingerprints");
+                                                  const std::string& cache_dir = "cache/fingerprints");
 
     // Simpan & muat ke/dari file JSON
     bool saveToFile(const std::string& filepath) const;

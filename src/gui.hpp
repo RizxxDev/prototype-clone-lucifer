@@ -155,7 +155,7 @@ public:
     char multibot_warp_world_[64] = "";
     char multibot_say_text_[256] = "";
     int selected_bot_id_ = 1;
-    char accounts_file_path_[256] = "accounts.txt";
+    char accounts_file_path_[256] = "cache/accounts.txt";
 
     // Proxy Test Buffers
     char proxy_test_host_[128] = "127.0.0.1";

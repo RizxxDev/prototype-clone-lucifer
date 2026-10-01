@@ -120,6 +120,14 @@ DeviceFingerprint DeviceFingerprint::getOrCreateForAccount(const std::string& ac
         return fp;
     }
 
+    // Periksa migrasi dari folder legacy .fingerprints/
+    std::string legacy_path = ".fingerprints/" + safe_name + ".json";
+    if (fs::exists(legacy_path) && fp.loadFromFile(legacy_path)) {
+        fp.saveToFile(file_path);
+        Logger::log("[FINGERPRINT] 📦 Migrasi profil fingerprint dari ", legacy_path, " ke ", file_path);
+        return fp;
+    }
+
     fp = generateRandom("id");
     fp.saveToFile(file_path);
     Logger::log("[FINGERPRINT] ✨ Membuat fingerprint perangkat baru untuk akun '", account_name, "'");

@@ -22,6 +22,7 @@
 #include "reconnect_controller.hpp"
 #include "socks5.hpp"
 #include "bot_manager.hpp"
+#include "item_database.hpp"
 #include <filesystem>
 
 using json = nlohmann::json;
@@ -141,6 +142,12 @@ int main(int argc, char** argv) {
     } else {
         Logger::log("\n[*] Tidak ada akun default di .env. Membuka GUI Lucifer Standalone...");
     }
+
+    // ---- Inisialisasi Cache Directory & Items Database ----
+    try {
+        std::filesystem::create_directories("cache/fingerprints");
+    } catch (...) {}
+    ItemDatabase::instance().loadFromFile("cache/items.dat");
 
     // ---- Fase 1b & 2: ENet Connect & Lucifer State Engine ----
     Logger::log("\n--- FASE 1b & 2: ENet Connect & Lucifer State Engine ---");
@@ -541,9 +548,12 @@ int main(int argc, char** argv) {
             bot_manager.addBot(acc_name, acc_pass, target_world);
         }
 
-        // Muat akun tambahan dari accounts.txt jika tersedia
-        if (std::filesystem::exists("accounts.txt")) {
+        // Muat akun dari cache/accounts.txt atau migrasi dari accounts.txt
+        if (std::filesystem::exists("cache/accounts.txt")) {
+            bot_manager.loadAccountsFromFile("cache/accounts.txt");
+        } else if (std::filesystem::exists("accounts.txt")) {
             bot_manager.loadAccountsFromFile("accounts.txt");
+            bot_manager.saveAccountsToFile("cache/accounts.txt");
         }
 
         gui.setBotManager(&bot_manager);
@@ -569,6 +579,7 @@ int main(int argc, char** argv) {
             cli.stop();
         }
 
+        bot_manager.saveAccountsToFile("cache/accounts.txt");
         bot_manager.stopAll();
 
         lua_engine.stopScript();

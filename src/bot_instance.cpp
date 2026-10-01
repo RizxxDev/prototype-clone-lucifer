@@ -2,6 +2,7 @@
 #include "http_client.hpp"
 #include "packet.hpp"
 #include "game_packet.hpp"
+#include "item_database.hpp"
 #include "logger.hpp"
 #include <cstring>
 #include <chrono>
@@ -335,6 +336,14 @@ void BotInstance::setupPacketHandlers() {
                                           pkt.payload.size() - sizeof(GameUpdatePacket));
                 }
                 warp_to_target();
+            }
+            else if (tank_type == PACKET_SEND_ITEM_DATABASE_DATA) {
+                if (pkt.payload.size() > sizeof(GameUpdatePacket)) {
+                    const uint8_t* extra = pkt.payload.data() + sizeof(GameUpdatePacket);
+                    size_t extra_sz = pkt.payload.size() - sizeof(GameUpdatePacket);
+                    Logger::log("[BOT #", id_, "] 📦 Menerima items.dat dari server (", extra_sz, " bytes). Menyimpan ke cache/items.dat...");
+                    ItemDatabase::instance().saveRawData(extra, extra_sz, "cache/items.dat");
+                }
             }
             else if (tank_type == PACKET_CALL_FUNCTION && pkt.payload.size() >= sizeof(GameUpdatePacket)) {
                 GameUpdatePacket call_pkt{};

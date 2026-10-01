@@ -6,6 +6,7 @@
 #include <chrono>
 #include <thread>
 #include <algorithm>
+#include <filesystem>
 
 BotManager::BotManager(size_t worker_threads)
     : pool_(worker_threads) {}
@@ -180,6 +181,13 @@ bool BotManager::loadAccountsFromFile(const std::string& filepath) {
 
 bool BotManager::saveAccountsToFile(const std::string& filepath) {
     std::lock_guard<std::mutex> lock(mtx_);
+    try {
+        std::filesystem::path p(filepath);
+        if (p.has_parent_path() && !std::filesystem::exists(p.parent_path())) {
+            std::filesystem::create_directories(p.parent_path());
+        }
+    } catch (...) {}
+
     std::ofstream file(filepath);
     if (!file.is_open()) return false;
 
@@ -187,7 +195,7 @@ bool BotManager::saveAccountsToFile(const std::string& filepath) {
     file << "# Format: GrowID:Password:TargetWorld:ProxyHost:ProxyPort:ProxyUser:ProxyPass\n\n";
 
     for (const auto& bot : bots_) {
-        file << bot->getAccountName() << ":" << "******" << ":" << bot->getTargetWorld();
+        file << bot->getAccountName() << ":" << bot->getPassword() << ":" << bot->getTargetWorld();
         if (bot->getProxy().enabled) {
             file << ":" << bot->getProxy().host << ":" << bot->getProxy().port
                  << ":" << bot->getProxy().username << ":" << bot->getProxy().password;

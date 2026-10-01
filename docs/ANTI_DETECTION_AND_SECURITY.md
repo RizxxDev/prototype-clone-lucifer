@@ -38,9 +38,10 @@ Modul `anti_detection.hpp` menyediakan pembuat identitas perangkat realistis:
 | `country` | String (2 Karakter) | Kode negara ISO-3166-1 alpha-2 (misal `"id"`, `"us"`, `"sg"`). |
 | `device_version` | Integer | Versi OS platform (`0` untuk Windows). |
 
-### Sistem Penyimpanan Persisten (.fingerprints/)
-- Setiap bot yang dibuat akan memeriksa folder `.fingerprints/<GrowID>.json`.
-- **Jika sudah ada**: Fingerprint lama dimuat kembali. Hal ini menjamin bahwa satu akun bot akan selalu menggunakan MAC, RID, dan hash yang sama di setiap sesi.
+### Sistem Penyimpanan Persisten (cache/fingerprints/)
+- Setiap bot yang dibuat akan memeriksa folder `cache/fingerprints/<GrowID>.json`.
+- **Jika sudah ada**: Fingerprint tersimpan dimuat kembali. Hal ini menjamin bahwa satu akun bot akan selalu menggunakan MAC, RID, dan hash yang konsisten di setiap sesi.
+- **Migrasi Otomatis**: Jika file belum ada di `cache/fingerprints/` tetapi ada di `.fingerprints/` (versi terdahulu), sistem otomatis memindahkan/menyalin profil ke dalam folder cache baru.
 - **Jika belum ada**: Fingerprint acak baru di-generate dan otomatis disimpan ke file JSON tersebut.
 - Pengguna dapat me-reset fingerprint kapan saja melalui tombol **🎲 Acak Ulang Fingerprint** di tab GUI.
 
