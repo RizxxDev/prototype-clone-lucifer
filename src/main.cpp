@@ -166,6 +166,9 @@ int main(int argc, char** argv) {
             } else {
                 hs += "f|0\n";
             }
+            if (!login_resp.token.empty()) {
+                hs += "ltoken|" + login_resp.token + "\n";
+            }
             hs += "requestedName|" + (acc_name.empty() ? "GuestBot" : acc_name) + "\n";
             hs += "protocol|" + std::to_string(protocol) + "\n";
             hs += "game_version|" + version + "\n";

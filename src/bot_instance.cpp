@@ -44,6 +44,9 @@ std::string BotInstance::buildHandshake(const std::string& meta_str, int user_id
     } else {
         hs += "f|0\n";
     }
+    if (!cached_token_.empty()) {
+        hs += "ltoken|" + cached_token_ + "\n";
+    }
     hs += "requestedName|" + (account_name_.empty() ? "GuestBot" : account_name_) + "\n";
     hs += "protocol|" + std::to_string(protocol) + "\n";
     hs += "game_version|" + version + "\n";
@@ -82,6 +85,7 @@ bool BotInstance::start() {
                 if (!login_resp.server_ip.empty()) game_host = login_resp.server_ip;
                 if (login_resp.server_port > 0) game_port = login_resp.server_port;
                 if (!login_resp.meta.empty()) cached_meta_ = login_resp.meta;
+                if (!login_resp.token.empty()) cached_token_ = login_resp.token;
                 Logger::log("[BOT #", id_, "] HTTP Login sukses.");
             } else {
                 Logger::log("[BOT #", id_, "] HTTP Login peringatan: ", login_resp.error);
@@ -145,6 +149,7 @@ void BotInstance::doReconnect() {
                 if (!retry_login.server_ip.empty()) game_host = retry_login.server_ip;
                 if (retry_login.server_port > 0) game_port = retry_login.server_port;
                 if (!retry_login.meta.empty()) cached_meta_ = retry_login.meta;
+                if (!retry_login.token.empty()) cached_token_ = retry_login.token;
             }
         } catch (...) {}
     }
@@ -239,13 +244,23 @@ void BotInstance::setupPacketHandlers() {
             std::string text((const char*)pkt.payload.data(), pkt.payload.size());
             while (!text.empty() && text.back() == '\0') text.pop_back();
 
+            Logger::log("[BOT #", id_, "] 💬 Server Text: ", text);
+
             if (text.find("Entering game") != std::string::npos ||
                 text.find("Logon authenticated") != std::string::npos) {
                 trigger_enter();
             }
             if (text.find("action|ping") != std::string::npos || text.find("ping\n") == 0) {
                 enet_->sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT, "action|pong\n");
+                Logger::log("[BOT #", id_, "] 🏓 Pong dikirim ke server");
             }
+        }
+        else if (pkt.type == GtPacket::NET_MESSAGE_ERROR) {
+            std::string err((const char*)pkt.payload.data(), pkt.payload.size());
+            while (!err.empty() && err.back() == '\0') err.pop_back();
+            Logger::log("[BOT #", id_, "] ❌ ERROR dari server: ", err);
+            std::lock_guard<std::mutex> lock(status_mtx_);
+            status_string_ = "Error: " + err;
         }
         else if (pkt.type == GtPacket::NET_MESSAGE_GAME_PACKET) {
             if (pkt.payload.size() >= sizeof(GameUpdatePacket)) {
@@ -296,6 +311,8 @@ void BotInstance::setupPacketHandlers() {
                     }
 
                     std::string fn = vars[0].str_val;
+                    Logger::log("[BOT #", id_, "] ⚡ Variant Function: ", fn);
+
                     auto get_vint = [](const Variant& v) -> int {
                         if (v.type == 9) return v.int_val;
                         if (v.type == 5) return (int)v.uint_val;
@@ -303,17 +320,38 @@ void BotInstance::setupPacketHandlers() {
                     };
 
                     if (fn.find("OnSuperMainStartAcceptLogon") != std::string::npos) {
+                        Logger::log("[BOT #", id_, "] 🌟 OnSuperMainStartAcceptLogon diterima! Mengirim action|enter_game...");
                         trigger_enter();
                     }
                     else if (fn.find("SetHasGrowID") != std::string::npos ||
                              fn.find("OnRequestWorldSelectMenu") != std::string::npos) {
-                        warp_to_target();
+                        Logger::log("[BOT #", id_, "] 📋 Berada di World Select Menu / Lobby.");
+                        {
+                            std::lock_guard<std::mutex> lock(status_mtx_);
+                            if (!in_world_.load()) status_string_ = "Lobby";
+                        }
+                        if (!target_world_.empty()) {
+                            warp_to_target();
+                        } else {
+                            Logger::log("[BOT #", id_, "] 💡 Target world belum disetel. Gunakan input 'Warp' untuk masuk world.");
+                        }
+                    }
+                    else if (fn.find("OnConsoleMessage") != std::string::npos) {
+                        if (vars.size() > 1) {
+                            Logger::log("[BOT #", id_, "] 💬 Console: ", vars[1].str_val);
+                        }
+                    }
+                    else if (fn.find("OnDialogRequest") != std::string::npos) {
+                        if (vars.size() > 1) {
+                            Logger::log("[BOT #", id_, "] 📋 Dialog Request:\n", vars[1].str_val);
+                        }
                     }
                     else if (fn.find("OnSpawn") != std::string::npos) {
                         in_world_ = true;
                         reconnect_ctrl_.onConnected();
                         std::string spawn_data = vars.size() > 1 ? vars[1].str_val : "";
                         world_->parseSpawn(spawn_data, account_name_);
+                        Logger::log("[BOT #", id_, "] 🎉 AKUN ONLINE di world! (OnSpawn)");
                     }
                     else if (fn.find("OnSetPos") != std::string::npos) {
                         if (vars.size() > 1 && vars[1].type == 3) {
@@ -325,6 +363,7 @@ void BotInstance::setupPacketHandlers() {
                         world_->parseRemove(remove_data);
                     }
                     else if (fn.find("OnFailedToEnterWorld") != std::string::npos) {
+                        Logger::log("[BOT #", id_, "] ⚠️ Gagal masuk world (rate limited / world full / invalid). Retry 2s...");
                         std::thread([this, warp_to_target]() {
                             std::this_thread::sleep_for(std::chrono::milliseconds(2000));
                             if (!in_world_.load()) {
@@ -339,6 +378,13 @@ void BotInstance::setupPacketHandlers() {
                         int userId = vars.size() > 3 ? get_vint(vars[3]) : 0;
                         std::string ipDoor = vars.size() > 4 ? vars[4].str_val : "";
                         int lmode = vars.size() > 5 ? get_vint(vars[5]) : 1;
+
+                        Logger::log("[BOT #", id_, "] 🔁 OnSendToServer diterima!");
+                        Logger::log("         Port   : ", sub_port);
+                        Logger::log("         Token  : ", token);
+                        Logger::log("         UserID : ", userId);
+                        Logger::log("         IPDoor : ", ipDoor);
+                        Logger::log("         LMode  : ", lmode);
 
                         std::string sub_host = game_host;
                         std::string door_id = "0";
@@ -362,7 +408,7 @@ void BotInstance::setupPacketHandlers() {
 
                         std::thread([this, sub_host, sub_port, sub_handshake]() {
                             redirecting_ = true;
-                            Logger::log("[BOT #", id_, "] 🔄 Redirecting ke sub-server ", sub_host, ":", sub_port);
+                            Logger::log("[BOT #", id_, "] 🔄 Redirecting ke sub-server ", sub_host, ":", sub_port, "...");
                             enet_->disconnect();
                             std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
@@ -373,7 +419,11 @@ void BotInstance::setupPacketHandlers() {
                             warped_to_target_ = false;
                             in_world_ = false;
 
-                            enet_->connect(sub_host, sub_port, 6000);
+                            if (enet_->connect(sub_host, sub_port, 6000)) {
+                                Logger::log("[BOT #", id_, "] ✅ Terhubung ke sub-server ", sub_host, ":", sub_port);
+                            } else {
+                                Logger::log("[BOT #", id_, "] ❌ Gagal terhubung ke sub-server!");
+                            }
                             redirecting_ = false;
                         }).detach();
                     }

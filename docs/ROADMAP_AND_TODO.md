@@ -79,7 +79,16 @@ Di bawah ini adalah kumpulan masalah non-sepele dalam reverse-engineering dan pe
   1. Buat parameter `acc_name`, `acc_pass`, dan `target_world` bersifat opsional di `src/main.cpp`.
   2. Apabila `acc_name.empty()`, lewati tahapan HTTP Login tunggal dan koneksi awal ENet, lalu langsung buka jendela GUI Lucifer v2.85 (DirectX 11).
   3. Kelola penambahan bot secara dinamis melalui file `accounts.txt` atau tombol modal **"+ Add Bot"** di sidebar GUI.
-  4. Bersihkan buffer input modal secara otomatis setelah penambahan bot berhasil.
+### 8. Web Login Token (`ltoken`) & Visibilitas Paket Masuk pada `BotInstance`
+- **Masalah**: Bot berhasil terhubung ke server ENet dan menerima paket balasan (`type=3` dan `type=4`), tetapi bot terdiam tanpa masuk ke world, dan tidak ada informasi error sama sekali yang muncul di terminal.
+- **Penyebab**:
+  1. Token hasil validasi web (`/player/growid/login/validate`) tidak disimpan dan tidak disuntikkan sebagai `ltoken|<token>` ke dalam paket handshake ENet.
+  2. Implementasi `BotInstance` sebelumnya tidak mencetak isi pesan teks game (`NET_MESSAGE_GAME_MESSAGE`), error paket (`NET_MESSAGE_ERROR`), dan fungsi variant (`OnDialogRequest`, `OnConsoleMessage`).
+  3. Ketika `target_world` kosong, bot sudah berhasil masuk ke Lobby/World Select Menu, namun karena tidak ada instruksi visual, tampak seolah bot belum login.
+- **Solusi**:
+  1. Simpan `login_resp.token` ke `cached_token_` dan sertakan baris `ltoken|<token>\n` di `buildHandshake()`.
+  2. Tambahkan logging lengkap untuk `Server Text`, `Variant Function`, `OnConsoleMessage`, `OnDialogRequest`, dan `NET_MESSAGE_ERROR`.
+  3. Tambahkan status `"Lobby"` saat `OnRequestWorldSelectMenu` diterima dan beri tahu pengguna bahwa bot sudah siap untuk di-warp.
 
 ---
 

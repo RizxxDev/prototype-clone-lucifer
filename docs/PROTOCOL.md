@@ -191,3 +191,22 @@ Dalam arsitektur server Growtopia, world-world game disebar di antara puluhan pr
    ```
 5. Buka koneksi ENet baru ke `sub_host` : `sub_port`.
 6. Kirim handshake sub-server setelah menerima `NET_MESSAGE_SERVER_HELLO`.
+
+---
+
+## 7. Web Dashboard Authentication & `ltoken`
+
+Pada GTPS modern yang menggunakan sistem Dashboard / Web Validation (seperti CreativePS dengan `loginurl|login.creativeps.eu`):
+1. **HTTP Pre-login**:
+   - `server_data.php` mengembalikan field `loginurl|...` dan `meta|...`.
+   - Bot melakukan POST ke `https://<loginurl>/player/growid/login/validate` dengan body `_token=<b64>&growId=<user>&password=<pass>`.
+   - Server mengembalikan JSON: `{"status":"success","token":"<auth_token>"}`.
+2. **Handshake ENet Injection**:
+   - Nilai token tersebut adalah **Login Token (`ltoken`)**.
+   - Handshake login ENet wajib menyertakan baris:
+     ```text
+     tankIDName|<GrowID>
+     tankIDPass|<Password>
+     ltoken|<token_dari_web_validate>
+     ```
+   - Tanpa baris `ltoken`, server utama akan menahan bot di pre-auth, mengirimkan dialog verifikasi (`OnDialogRequest`), atau memutus koneksi secara pasif.
