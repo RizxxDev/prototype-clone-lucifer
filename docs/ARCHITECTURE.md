@@ -186,17 +186,44 @@ Alur eksekusi aplikasi berjalan melalui tahapan terstruktur:
 - **`LuciferGui`**:
   - Inisialisasi Win32 Window dengan Dark Mode Immersive Theme (`DwmSetWindowAttribute`).
   - Inisialisasi Microsoft DirectX 11 Device, SwapChain, dan RenderTargetView.
-  - Integrasi Dear ImGui dengan custom Dark-Blood Lucifer palette.
-  - 8 Tab fungsional lengkap:
-    1. **Status**: Ikhtisar bot aktif, info server, net ID, posisi tile, quick controls.
-    2. **Multi-Bot Manager**: Orkestrasi thread pool, tabel status semua bot, form tambah bot, import/export akun.
-    3. **Gerak (Movement)**: Tombol D-Pad visual dan keyboard navigation (Arrow keys).
-    4. **Inventory**: Grid inventaris real-time dengan pencarian/filter nama & ID item.
-    5. **World & Pemain**: Radar visual pemain di world dan informasi world map.
-    6. **Anti-Detection & Reconnect**: Inspeksi fingerprint, generator acak, SOCKS5 proxy tester, kontrol auto-reconnect backoff.
-    7. **Script Editor (Lua)**: Editor skrip multi-baris dengan template Bothax & Lucifer siap pakai.
-    8. **Console Logs**: Log real-time thread-safe dengan pewarnaan syntax, pencarian, dan auto-scroll.
-    9. **Pengaturan**: Konfigurasi server IP, port, akun, dan logging flags.
+  - Integrasi Dear ImGui dengan **Palet Deep Space Navy & Electric Cyan (Identik dengan Lucifer v2.85)**:
+    - Background: Sangat gelap `#070d16`
+    - Card Panels: Dark Navy `#0b1726` dengan Border `#143352`
+    - Akses & Seleksi: Electric Cyan `#00a8ff` / `#0090e3`
+    - Status Online: Neon Lime Green `#00ff88` / `#2ecc71`
+  - **Widget Kustom Khas Lucifer**:
+    - `ToggleSwitch(id, bool*)`: Sakelar toggle berbentuk pil lonjong modern dengan sliding circular knob putih.
+    - D-Pad Cross Navigation: Layout salib simetris dengan tombol Enter Pintu/Portal (`🚪`) di pusat.
+  - **Hierarki Navigasi Antarmuka Lucifer v2.85**:
+    - **Title Bar**: Judul `Lucifer v2.85 [discord.gg/nuron]` dengan kontrol ikon `[+]`, `[🔒]`, `[🔄]`, `[⏻]`.
+    - **Top Navigation Bar**:
+      1. `[ 🤖 Bots ]`: Dashboard utama (Sidebar pemilih bot + Konten Sub-Tabs).
+      2. `[ 📋 List ]`: Tampilan tabel multi-bot lengkap (ID, Akun, Status, World, Gems, Ping, Proxy, Aksi).
+      3. `[ </> Executor ]`: Editor skrip Lua 5.4 multi-baris dan executor.
+      4. `[ 🌐 Proxy ]`: Pengelola & live tester koneksi proxy SOCKS5 (RFC 1928/1929).
+      5. `[ 🔀 Switch ]`: Peralihan cepat sub-server dan kontrol fast-reconnect.
+      6. `[ 🗄️ Database ]`: Cache database item Growtopia (`items.dat`) dengan filter pencarian instan.
+      7. `[ ⚙️ Settings ]`: Konfigurasi server host, port, login URL, versi game, dan protokol.
+    - **Panel Kiri `[ 🤖 Bots ]` (Sidebar Bot Selector)**:
+      - Toggle `Select All` + Checkbox `Enable Multi-Select`.
+      - Box daftar bot dengan status online berwarna hijau neon (`#00ff88`).
+      - Input pencarian: `Search for bots..`
+      - Tombol aksi: `[ Load ]`, `[ Save ]`, `[ Add Bot ]`, `[ Remove Bot ]`.
+    - **Panel Kanan `[ 🤖 Bots ]` (Sub-Tabs)**:
+      - Sub-tabs: `[ Main ]`, `[ World ]`, `[ Inventory ]`, `[ Console ]`, `[ Automation ]`, `[ Rotation ]`, `[ Logs ]`.
+      - **Grid 2x2 pada Sub-Tab `[ Main ]`**:
+        1. **Card `👤 Bot Information` (Kiri Atas)**:
+           - Status Online & Ping ms `[37?]`, Google Idle, Level & Gems, World & Posisi Tile `(X, Y)`, Played & Age.
+           - Input nama world, tombol `Leave`, `Warp`, serta tombol utama `Connect` & `Disconnect`.
+        2. **Card `✥ Movement` (Kanan Atas)**:
+           - Tombol `Respawn` di header card.
+           - Tombol navigasi D-Pad bersilang: `[↑]`, `[←]`, `[🚪]`, `[→]`, `[↓]`.
+           - Slider jarak langkah tile (`1`-`10`) dengan ikon indikator dan gear setting.
+        3. **Card `⚙️ Preferences` (Kiri Bawah)**:
+           - 5 Baris opsi toggle Lucifer: `Bypass Logon`, `Auto Reconnect [9.4]`, `Auto Collect`, `Auto Accept`, `Auto Disconnect On Mod`.
+        4. **Card `🕒 Intervals` (Kanan Bawah)**:
+           - Toggle `Dynamic Delay` pada header card.
+           - 4 Baris interval dengan random jitter: `Move`, `Collect`, `Hit`, `Place` (contoh: `0.235s (+0.111s)`).
 
 ---
 

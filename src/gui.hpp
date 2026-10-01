@@ -49,8 +49,44 @@ public:
     // Bot Manager Setter
     void setBotManager(BotManager* mgr) { bot_manager_ = mgr; }
 
-private:
-    void renderTabs();
+    enum class LuciferTopTab {
+        Bots = 0,
+        List,
+        Executor,
+        Proxy,
+        Switch,
+        Database,
+        Settings
+    };
+
+    enum class LuciferSubTab {
+        Main = 0,
+        World,
+        Inventory,
+        Console,
+        Automation,
+        Rotation,
+        Logs
+    };
+
+    void renderMainLayout();
+    void renderTitleBar();
+    void renderTopNav();
+    void renderTabBots();
+    void renderSidebar(float width, float height);
+    void renderSubTabMain(float width, float height);
+    void renderCardBotInfo(float w, float h);
+    void renderCardMovement(float w, float h);
+    void renderCardPreferences(float w, float h);
+    void renderCardIntervals(float w, float h);
+
+    void renderTabList();
+    void renderTabExecutor();
+    void renderTabProxy();
+    void renderTabSwitch();
+    void renderTabDatabase();
+    void renderTabSettings();
+
     void renderTabStatus();
     void renderTabMultiBot();
     void renderTabMovement();
@@ -59,7 +95,13 @@ private:
     void renderTabAntiDetection();
     void renderTabScriptEditor();
     void renderTabConsole();
-    void renderTabSettings();
+
+    void renderSubTabWorld();
+    void renderSubTabInventory();
+    void renderSubTabConsole();
+    void renderSubTabAutomation();
+    void renderSubTabRotation();
+    void renderSubTabLogs();
 
     void applyLuciferTheme();
 
@@ -128,6 +170,43 @@ private:
     // Console Buffers
     char log_filter_[128] = "";
     bool auto_scroll_log_ = true;
+
+    // Active Navigation Tabs
+    LuciferTopTab current_top_tab_ = LuciferTopTab::Bots;
+    LuciferSubTab current_sub_tab_ = LuciferSubTab::Main;
+
+    // Sidebar & Multi-Select Buffers
+    bool select_all_ = false;
+    bool enable_multiselect_ = false;
+    char bot_search_[64] = "";
+    std::vector<int> selected_bot_ids_;
+
+    // Preferences Toggles (Lucifer v2.85)
+    bool pref_bypass_logon_ = false;
+    bool pref_auto_reconnect_ = true;
+    bool pref_auto_collect_ = false;
+    bool pref_auto_accept_ = false;
+    bool pref_auto_mod_disconnect_ = true;
+
+    // Intervals (Lucifer v2.85)
+    bool dynamic_delay_ = true;
+    bool interval_move_enabled_ = true;
+    float interval_move_base_ = 0.235f;
+    float interval_move_jitter_ = 0.111f;
+    bool interval_collect_enabled_ = true;
+    float interval_collect_base_ = 0.100f;
+    float interval_collect_jitter_ = 0.047f;
+    bool interval_hit_enabled_ = true;
+    float interval_hit_base_ = 0.150f;
+    float interval_hit_jitter_ = 0.071f;
+    bool interval_place_enabled_ = true;
+    float interval_place_base_ = 0.150f;
+    float interval_place_jitter_ = 0.071f;
+
+    // Rotation Buffers
+    char rotation_world_input_[64] = "";
+    std::vector<std::string> rotation_worlds_;
+    bool rotation_running_ = false;
 
     // Settings Buffers
     char cfg_login_url_[256] = "";

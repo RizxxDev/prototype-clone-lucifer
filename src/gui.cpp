@@ -149,64 +149,97 @@ void LuciferGui::cleanupRenderTarget() {
     }
 }
 
+static bool ToggleSwitch(const char* str_id, bool* v) {
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+    float height = 18.0f;
+    float width = 34.0f;
+    float radius = height * 0.5f;
+
+    if (ImGui::InvisibleButton(str_id, ImVec2(width, height))) {
+        *v = !*v;
+    }
+
+    ImU32 col_bg;
+    if (*v) {
+        col_bg = ImGui::IsItemHovered() ? IM_COL32(0, 185, 255, 255) : IM_COL32(0, 150, 235, 255);
+    } else {
+        col_bg = ImGui::IsItemHovered() ? IM_COL32(28, 52, 78, 255) : IM_COL32(18, 36, 56, 255);
+    }
+
+    draw_list->AddRectFilled(p, ImVec2(p.x + width, p.y + height), col_bg, radius);
+    draw_list->AddRect(p, ImVec2(p.x + width, p.y + height), IM_COL32(35, 75, 115, 180), radius, 0, 1.0f);
+
+    float t = *v ? 1.0f : 0.0f;
+    float circle_x = p.x + radius + t * (width - 2 * radius);
+    float circle_y = p.y + radius;
+    ImU32 knob_col = *v ? IM_COL32(255, 255, 255, 255) : IM_COL32(130, 155, 185, 255);
+    draw_list->AddCircleFilled(ImVec2(circle_x, circle_y), radius - 2.5f, knob_col);
+
+    return *v;
+}
+
 void LuciferGui::applyLuciferTheme() {
     ImGuiStyle& style = ImGui::GetStyle();
     ImVec4* colors = style.Colors;
 
-    style.WindowRounding    = 8.0f;
-    style.FrameRounding     = 5.0f;
+    style.WindowRounding    = 0.0f;
+    style.ChildRounding     = 5.0f;
+    style.FrameRounding     = 4.0f;
     style.PopupRounding     = 5.0f;
-    style.ScrollbarRounding = 5.0f;
+    style.ScrollbarRounding = 4.0f;
     style.GrabRounding      = 4.0f;
-    style.TabRounding       = 6.0f;
-    style.WindowBorderSize  = 1.0f;
+    style.TabRounding       = 4.0f;
+    style.WindowBorderSize  = 0.0f;
+    style.ChildBorderSize   = 1.0f;
     style.FrameBorderSize   = 1.0f;
-    style.ItemSpacing       = ImVec2(8.0f, 8.0f);
-    style.ItemInnerSpacing  = ImVec2(6.0f, 6.0f);
-    style.WindowPadding     = ImVec2(12.0f, 12.0f);
-    style.FramePadding      = ImVec2(8.0f, 5.0f);
+    style.ItemSpacing       = ImVec2(6.0f, 6.0f);
+    style.ItemInnerSpacing  = ImVec2(6.0f, 4.0f);
+    style.WindowPadding     = ImVec2(8.0f, 8.0f);
+    style.FramePadding      = ImVec2(6.0f, 4.0f);
 
-    // Lucifer Crimson Red Dark Palette
-    colors[ImGuiCol_Text]                  = ImVec4(0.95f, 0.96f, 0.98f, 1.00f);
-    colors[ImGuiCol_TextDisabled]          = ImVec4(0.50f, 0.52f, 0.58f, 1.00f);
-    colors[ImGuiCol_WindowBg]              = ImVec4(0.09f, 0.10f, 0.13f, 1.00f);
-    colors[ImGuiCol_ChildBg]               = ImVec4(0.12f, 0.13f, 0.17f, 1.00f);
-    colors[ImGuiCol_PopupBg]               = ImVec4(0.11f, 0.12f, 0.16f, 0.98f);
-    colors[ImGuiCol_Border]                = ImVec4(0.20f, 0.22f, 0.28f, 1.00f);
-    colors[ImGuiCol_BorderShadow]          = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-    colors[ImGuiCol_FrameBg]               = ImVec4(0.15f, 0.16f, 0.22f, 1.00f);
-    colors[ImGuiCol_FrameBgHovered]        = ImVec4(0.22f, 0.24f, 0.32f, 1.00f);
-    colors[ImGuiCol_FrameBgActive]         = ImVec4(0.28f, 0.30f, 0.40f, 1.00f);
-    colors[ImGuiCol_TitleBg]               = ImVec4(0.08f, 0.09f, 0.12f, 1.00f);
-    colors[ImGuiCol_TitleBgActive]         = ImVec4(0.14f, 0.15f, 0.20f, 1.00f);
-    colors[ImGuiCol_TitleBgCollapsed]      = ImVec4(0.08f, 0.09f, 0.12f, 1.00f);
-    colors[ImGuiCol_MenuBarBg]             = ImVec4(0.12f, 0.13f, 0.17f, 1.00f);
-    colors[ImGuiCol_ScrollbarBg]           = ImVec4(0.08f, 0.09f, 0.12f, 0.50f);
-    colors[ImGuiCol_ScrollbarGrab]         = ImVec4(0.25f, 0.27f, 0.35f, 1.00f);
-    colors[ImGuiCol_ScrollbarGrabHovered]  = ImVec4(0.35f, 0.38f, 0.48f, 1.00f);
-    colors[ImGuiCol_ScrollbarGrabActive]   = ImVec4(0.45f, 0.48f, 0.60f, 1.00f);
-    colors[ImGuiCol_CheckMark]             = ImVec4(0.92f, 0.22f, 0.28f, 1.00f);
-    colors[ImGuiCol_SliderGrab]            = ImVec4(0.85f, 0.20f, 0.25f, 1.00f);
-    colors[ImGuiCol_SliderGrabActive]      = ImVec4(0.95f, 0.25f, 0.30f, 1.00f);
-    colors[ImGuiCol_Button]                = ImVec4(0.75f, 0.18f, 0.22f, 1.00f);
-    colors[ImGuiCol_ButtonHovered]         = ImVec4(0.88f, 0.22f, 0.27f, 1.00f);
-    colors[ImGuiCol_ButtonActive]          = ImVec4(0.65f, 0.15f, 0.18f, 1.00f);
-    colors[ImGuiCol_Header]                = ImVec4(0.75f, 0.18f, 0.22f, 0.40f);
-    colors[ImGuiCol_HeaderHovered]         = ImVec4(0.85f, 0.20f, 0.25f, 0.60f);
-    colors[ImGuiCol_HeaderActive]          = ImVec4(0.95f, 0.22f, 0.28f, 0.80f);
-    colors[ImGuiCol_Separator]             = ImVec4(0.20f, 0.22f, 0.28f, 1.00f);
-    colors[ImGuiCol_SeparatorHovered]      = ImVec4(0.85f, 0.20f, 0.25f, 0.78f);
-    colors[ImGuiCol_SeparatorActive]       = ImVec4(0.85f, 0.20f, 0.25f, 1.00f);
-    colors[ImGuiCol_Tab]                   = ImVec4(0.14f, 0.15f, 0.20f, 1.00f);
-    colors[ImGuiCol_TabHovered]            = ImVec4(0.70f, 0.18f, 0.22f, 0.80f);
-    colors[ImGuiCol_TabActive]             = ImVec4(0.85f, 0.20f, 0.25f, 1.00f);
-    colors[ImGuiCol_TabUnfocused]          = ImVec4(0.11f, 0.12f, 0.16f, 1.00f);
-    colors[ImGuiCol_TabUnfocusedActive]    = ImVec4(0.20f, 0.22f, 0.28f, 1.00f);
-    colors[ImGuiCol_TableHeaderBg]         = ImVec4(0.16f, 0.18f, 0.24f, 1.00f);
-    colors[ImGuiCol_TableBorderStrong]     = ImVec4(0.24f, 0.26f, 0.34f, 1.00f);
-    colors[ImGuiCol_TableBorderLight]      = ImVec4(0.18f, 0.20f, 0.26f, 1.00f);
-    colors[ImGuiCol_TableRowBg]            = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-    colors[ImGuiCol_TableRowBgAlt]         = ImVec4(1.00f, 1.00f, 1.00f, 0.03f);
+    // Deep Space Cyan / Navy Blue Palette (Lucifer v2.85)
+    colors[ImGuiCol_Text]                  = ImVec4(0.90f, 0.95f, 0.99f, 1.00f);
+    colors[ImGuiCol_TextDisabled]          = ImVec4(0.42f, 0.54f, 0.68f, 1.00f);
+    colors[ImGuiCol_WindowBg]              = ImVec4(0.027f, 0.051f, 0.086f, 1.00f); // #070d16
+    colors[ImGuiCol_ChildBg]               = ImVec4(0.043f, 0.090f, 0.149f, 0.96f); // #0b1726
+    colors[ImGuiCol_PopupBg]               = ImVec4(0.040f, 0.080f, 0.135f, 0.98f);
+    colors[ImGuiCol_Border]                = ImVec4(0.078f, 0.200f, 0.322f, 0.90f); // #143352
+    colors[ImGuiCol_BorderShadow]          = ImVec4(0.000f, 0.000f, 0.000f, 0.00f);
+    colors[ImGuiCol_FrameBg]               = ImVec4(0.035f, 0.086f, 0.141f, 1.00f);
+    colors[ImGuiCol_FrameBgHovered]        = ImVec4(0.051f, 0.133f, 0.220f, 1.00f);
+    colors[ImGuiCol_FrameBgActive]         = ImVec4(0.071f, 0.188f, 0.310f, 1.00f);
+    colors[ImGuiCol_TitleBg]               = ImVec4(0.020f, 0.043f, 0.075f, 1.00f);
+    colors[ImGuiCol_TitleBgActive]         = ImVec4(0.027f, 0.055f, 0.094f, 1.00f);
+    colors[ImGuiCol_TitleBgCollapsed]      = ImVec4(0.020f, 0.043f, 0.075f, 1.00f);
+    colors[ImGuiCol_MenuBarBg]             = ImVec4(0.035f, 0.075f, 0.125f, 1.00f);
+    colors[ImGuiCol_ScrollbarBg]           = ImVec4(0.025f, 0.050f, 0.080f, 0.50f);
+    colors[ImGuiCol_ScrollbarGrab]         = ImVec4(0.090f, 0.220f, 0.350f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabHovered]  = ImVec4(0.120f, 0.290f, 0.460f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabActive]   = ImVec4(0.000f, 0.550f, 0.880f, 1.00f);
+    colors[ImGuiCol_CheckMark]             = ImVec4(0.000f, 0.650f, 1.000f, 1.00f);
+    colors[ImGuiCol_SliderGrab]            = ImVec4(0.000f, 0.580f, 0.920f, 1.00f);
+    colors[ImGuiCol_SliderGrabActive]      = ImVec4(0.200f, 0.750f, 1.000f, 1.00f);
+    colors[ImGuiCol_Button]                = ImVec4(0.047f, 0.157f, 0.267f, 1.00f);
+    colors[ImGuiCol_ButtonHovered]         = ImVec4(0.075f, 0.235f, 0.392f, 1.00f);
+    colors[ImGuiCol_ButtonActive]          = ImVec4(0.000f, 0.518f, 0.820f, 1.00f);
+    colors[ImGuiCol_Header]                = ImVec4(0.000f, 0.450f, 0.750f, 0.40f);
+    colors[ImGuiCol_HeaderHovered]         = ImVec4(0.000f, 0.550f, 0.880f, 0.60f);
+    colors[ImGuiCol_HeaderActive]          = ImVec4(0.000f, 0.600f, 0.950f, 0.80f);
+    colors[ImGuiCol_Separator]             = ImVec4(0.078f, 0.200f, 0.322f, 0.70f);
+    colors[ImGuiCol_SeparatorHovered]      = ImVec4(0.000f, 0.550f, 0.880f, 0.78f);
+    colors[ImGuiCol_SeparatorActive]       = ImVec4(0.000f, 0.600f, 0.950f, 1.00f);
+    colors[ImGuiCol_Tab]                   = ImVec4(0.039f, 0.086f, 0.145f, 1.00f);
+    colors[ImGuiCol_TabHovered]            = ImVec4(0.075f, 0.235f, 0.392f, 0.85f);
+    colors[ImGuiCol_TabActive]             = ImVec4(0.000f, 0.518f, 0.820f, 1.00f);
+    colors[ImGuiCol_TabUnfocused]          = ImVec4(0.030f, 0.065f, 0.110f, 1.00f);
+    colors[ImGuiCol_TabUnfocusedActive]    = ImVec4(0.055f, 0.150f, 0.250f, 1.00f);
+    colors[ImGuiCol_TableHeaderBg]         = ImVec4(0.050f, 0.115f, 0.190f, 1.00f);
+    colors[ImGuiCol_TableBorderStrong]     = ImVec4(0.090f, 0.220f, 0.350f, 1.00f);
+    colors[ImGuiCol_TableBorderLight]      = ImVec4(0.065f, 0.160f, 0.260f, 1.00f);
+    colors[ImGuiCol_TableRowBg]            = ImVec4(0.000f, 0.000f, 0.000f, 0.00f);
+    colors[ImGuiCol_TableRowBgAlt]         = ImVec4(1.000f, 1.000f, 1.000f, 0.02f);
 }
 
 bool LuciferGui::init(HINSTANCE hInstance, int width, int height) {
@@ -219,7 +252,7 @@ bool LuciferGui::init(HINSTANCE hInstance, int width, int height) {
 
     hWnd_ = ::CreateWindowW(
         wc_.lpszClassName,
-        L"Lucifer Bot — GTPS Client Suite",
+        L"Lucifer v2.85 [discord.gg/nuron]",
         WS_OVERLAPPEDWINDOW,
         100, 100, width, height,
         nullptr, nullptr, wc_.hInstance, nullptr);
@@ -290,13 +323,13 @@ void LuciferGui::run() {
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        renderTabs();
+        renderMainLayout();
 
         // Trigger Bothax Lua OnDraw hook
         lua_engine_.triggerOnDraw(ImGui::GetIO().DeltaTime);
 
         ImGui::Render();
-        const float clear_color[4] = { 0.08f, 0.09f, 0.12f, 1.00f };
+        const float clear_color[4] = { 0.027f, 0.051f, 0.086f, 1.00f };
         pd3dDeviceContext_->OMSetRenderTargets(1, &mainRenderTargetView_, nullptr);
         pd3dDeviceContext_->ClearRenderTargetView(mainRenderTargetView_, clear_color);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
@@ -304,7 +337,7 @@ void LuciferGui::run() {
     }
 }
 
-void LuciferGui::renderTabs() {
+void LuciferGui::renderMainLayout() {
     ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(io.DisplaySize);
@@ -317,79 +350,854 @@ void LuciferGui::renderTabs() {
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 6.0f));
 
     if (ImGui::Begin("LuciferMainWindow", nullptr, window_flags)) {
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.25f, 0.30f, 1.00f));
-        ImGui::Text("🔥 LUCIFER PROTOTYPE");
-        ImGui::PopStyleColor();
-        ImGui::SameLine();
-        ImGui::TextDisabled("— Growtopia Private Server Bot Suite");
+        renderTitleBar();
+        renderTopNav();
 
-        ImGui::SameLine(ImGui::GetWindowWidth() - 320);
-        if (enet_.isConnected()) {
-            ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.3f, 1.0f), "● ONLINE");
-            ImGui::SameLine();
-            ImGui::TextDisabled("| %s", info_.account_name.c_str());
-        } else if (reconnect_ctrl_.getState() == ReconnectState::WaitingReconnect) {
-            ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.2f, 1.0f), "● RETRY in %ds (#%d)",
-                               reconnect_ctrl_.getSecondsRemaining(), reconnect_ctrl_.getRetryCount());
-            ImGui::SameLine();
-            ImGui::TextDisabled("| %s", info_.account_name.c_str());
-        } else if (reconnect_ctrl_.getState() == ReconnectState::Reconnecting) {
-            ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "● CONNECTING...");
-            ImGui::SameLine();
-            ImGui::TextDisabled("| %s", info_.account_name.c_str());
-        } else {
-            ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "● OFFLINE");
-            ImGui::SameLine();
-            ImGui::TextDisabled("| Disconnected");
-        }
-
-        ImGui::Separator();
         ImGui::Spacing();
 
-        if (ImGui::BeginTabBar("LuciferTabs", ImGuiTabBarFlags_None)) {
-            if (ImGui::BeginTabItem("🏠 Status")) {
-                renderTabStatus();
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("🤖 Multi-Bot Manager")) {
-                renderTabMultiBot();
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("🚶 Gerak (Movement)")) {
-                renderTabMovement();
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("🎒 Inventory")) {
-                renderTabInventory();
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("🌍 World & Pemain")) {
-                renderTabWorld();
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("🛡️ Anti-Detection & Reconnect")) {
-                renderTabAntiDetection();
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("📜 Script Editor (Lua)")) {
-                renderTabScriptEditor();
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("📜 Console Logs")) {
-                renderTabConsole();
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("⚙️ Pengaturan")) {
-                renderTabSettings();
-                ImGui::EndTabItem();
-            }
-            ImGui::EndTabBar();
+        switch (current_top_tab_) {
+        case LuciferTopTab::Bots:     renderTabBots(); break;
+        case LuciferTopTab::List:     renderTabList(); break;
+        case LuciferTopTab::Executor: renderTabExecutor(); break;
+        case LuciferTopTab::Proxy:    renderTabProxy(); break;
+        case LuciferTopTab::Switch:   renderTabSwitch(); break;
+        case LuciferTopTab::Database: renderTabDatabase(); break;
+        case LuciferTopTab::Settings: renderTabSettings(); break;
         }
     }
     ImGui::End();
+    ImGui::PopStyleVar(3);
+}
+
+void LuciferGui::renderTitleBar() {
+    float avail_w = ImGui::GetContentRegionAvail().x;
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+
+    // Background bar
+    draw->AddRectFilled(pos, ImVec2(pos.x + avail_w, pos.y + 24.0f), IM_COL32(8, 17, 28, 255), 3.0f);
+
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 3.0f);
+
+    // Title centered
+    const char* title_text = "Lucifer v2.85 [discord.gg/nuron]";
+    float title_w = ImGui::CalcTextSize(title_text).x;
+    ImGui::SetCursorPosX((avail_w - title_w) * 0.5f);
+    ImGui::TextColored(ImVec4(0.85f, 0.92f, 0.98f, 1.0f), "%s", title_text);
+
+    // Window action icons on far right
+    ImGui::SameLine(avail_w - 96.0f);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.15f, 0.20f, 0.85f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.90f, 0.20f, 0.25f, 1.0f));
+    if (ImGui::Button("+##title_plus", ImVec2(18, 16))) {}
+    ImGui::PopStyleColor(2);
+
+    ImGui::SameLine();
+    if (ImGui::Button("🔒##title_lock", ImVec2(18, 16))) {}
+
+    ImGui::SameLine();
+    if (ImGui::Button("🔄##title_reload", ImVec2(18, 16))) {
+        if (reconnect_fn_) reconnect_fn_();
+    }
+
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.15f, 0.18f, 0.90f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.20f, 0.22f, 1.0f));
+    if (ImGui::Button("⏻##title_power", ImVec2(20, 16))) {
+        running_ = false;
+    }
+    ImGui::PopStyleColor(2);
+
+    ImGui::Spacing();
+}
+
+void LuciferGui::renderTopNav() {
+    struct NavItem {
+        const char* label;
+        LuciferTopTab tab;
+    };
+    static const NavItem items[] = {
+        { "🤖 Bots", LuciferTopTab::Bots },
+        { "📋 List", LuciferTopTab::List },
+        { "</> Executor", LuciferTopTab::Executor },
+        { "🌐 Proxy", LuciferTopTab::Proxy },
+        { "🔀 Switch", LuciferTopTab::Switch },
+        { "🗄️ Database", LuciferTopTab::Database },
+        { "⚙️ Settings", LuciferTopTab::Settings },
+    };
+
+    float tab_w = 118.0f;
+    float tab_h = 28.0f;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 0.0f));
+
+    for (size_t i = 0; i < sizeof(items) / sizeof(items[0]); ++i) {
+        if (i > 0) ImGui::SameLine();
+
+        bool is_active = (current_top_tab_ == items[i].tab);
+
+        if (is_active) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.00f, 0.42f, 0.70f, 0.90f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.00f, 0.50f, 0.82f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.035f, 0.080f, 0.135f, 0.85f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.065f, 0.160f, 0.260f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.72f, 0.88f, 1.0f));
+        }
+
+        if (ImGui::Button(items[i].label, ImVec2(tab_w, tab_h))) {
+            current_top_tab_ = items[i].tab;
+        }
+
+        if (is_active) {
+            ImVec2 p0 = ImGui::GetItemRectMin();
+            ImVec2 p1 = ImGui::GetItemRectMax();
+            ImGui::GetWindowDrawList()->AddRectFilled(
+                ImVec2(p0.x, p1.y - 2.5f),
+                ImVec2(p1.x, p1.y),
+                IM_COL32(0, 185, 255, 255)
+            );
+        }
+
+        ImGui::PopStyleColor(3);
+    }
+
     ImGui::PopStyleVar(2);
+    ImGui::Separator();
+}
+
+void LuciferGui::renderTabBots() {
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    float sidebar_w = 230.0f;
+
+    renderSidebar(sidebar_w, avail.y);
+
+    ImGui::SameLine();
+
+    float content_w = avail.x - sidebar_w - 6.0f;
+    ImGui::BeginChild("BotsContentArea", ImVec2(content_w, avail.y), false);
+
+    struct SubItem {
+        const char* label;
+        LuciferSubTab tab;
+    };
+    static const SubItem sub_items[] = {
+        { "Main", LuciferSubTab::Main },
+        { "World", LuciferSubTab::World },
+        { "Inventory", LuciferSubTab::Inventory },
+        { "Console", LuciferSubTab::Console },
+        { "Automation", LuciferSubTab::Automation },
+        { "Rotation", LuciferSubTab::Rotation },
+        { "Logs", LuciferSubTab::Logs },
+    };
+
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 0.0f));
+
+    float sub_w = 80.0f;
+    float sub_h = 24.0f;
+
+    for (size_t i = 0; i < sizeof(sub_items) / sizeof(sub_items[0]); ++i) {
+        if (i > 0) ImGui::SameLine();
+
+        bool is_active = (current_sub_tab_ == sub_items[i].tab);
+
+        if (is_active) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.00f, 0.38f, 0.65f, 0.90f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.00f, 0.48f, 0.78f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.038f, 0.082f, 0.138f, 0.80f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.065f, 0.155f, 0.245f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.68f, 0.82f, 1.0f));
+        }
+
+        if (ImGui::Button(sub_items[i].label, ImVec2(sub_w, sub_h))) {
+            current_sub_tab_ = sub_items[i].tab;
+        }
+
+        if (is_active) {
+            ImVec2 p0 = ImGui::GetItemRectMin();
+            ImVec2 p1 = ImGui::GetItemRectMax();
+            ImGui::GetWindowDrawList()->AddRectFilled(
+                ImVec2(p0.x, p1.y - 2.0f),
+                ImVec2(p1.x, p1.y),
+                IM_COL32(0, 185, 255, 255)
+            );
+        }
+
+        ImGui::PopStyleColor(3);
+    }
+    ImGui::PopStyleVar(2);
+
+    ImGui::Spacing();
+
+    ImVec2 sub_avail = ImGui::GetContentRegionAvail();
+
+    switch (current_sub_tab_) {
+    case LuciferSubTab::Main:
+        renderSubTabMain(sub_avail.x, sub_avail.y);
+        break;
+    case LuciferSubTab::World:
+        renderSubTabWorld();
+        break;
+    case LuciferSubTab::Inventory:
+        renderSubTabInventory();
+        break;
+    case LuciferSubTab::Console:
+        renderSubTabConsole();
+        break;
+    case LuciferSubTab::Automation:
+        renderSubTabAutomation();
+        break;
+    case LuciferSubTab::Rotation:
+        renderSubTabRotation();
+        break;
+    case LuciferSubTab::Logs:
+        renderSubTabLogs();
+        break;
+    }
+
+    ImGui::EndChild();
+}
+
+void LuciferGui::renderSidebar(float width, float height) {
+    ImGui::BeginChild("BotsSidebar", ImVec2(width, height), true);
+
+    // Row 1: Select All + Toggle Switch
+    ImGui::Text("Select All");
+    ImGui::SameLine(width - 48.0f);
+    ToggleSwitch("SelectAllToggle", &select_all_);
+
+    // Row 2: Enable Multi-Select
+    ImGui::Checkbox("Enable Multi-Select", &enable_multiselect_);
+
+    ImGui::Spacing();
+
+    // Bot List Box
+    float list_box_h = height - 165.0f;
+    if (list_box_h < 100.0f) list_box_h = 100.0f;
+
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.025f, 0.055f, 0.090f, 1.0f));
+    ImGui::BeginChild("BotListBox", ImVec2(0, list_box_h), true);
+
+    std::vector<std::shared_ptr<BotInstance>> bots;
+    if (bot_manager_) {
+        bots = bot_manager_->getBots();
+        if (bots.empty() && !info_.account_name.empty()) {
+            bot_manager_->addBot(info_.account_name, "password", cfg_target_world_);
+            bots = bot_manager_->getBots();
+        }
+    }
+
+    if (bots.empty()) {
+        bool is_online = enet_.isConnected();
+        ImVec4 text_col = is_online ? ImVec4(0.18f, 0.95f, 0.40f, 1.0f) : ImVec4(0.60f, 0.70f, 0.80f, 1.0f);
+        ImGui::TextColored(text_col, "%s", info_.account_name.empty() ? "MyBot" : info_.account_name.c_str());
+    } else {
+        for (auto& bot : bots) {
+            std::string name = bot->getAccountName();
+            if (strlen(bot_search_) > 0) {
+                std::string filter = bot_search_;
+                std::string name_lower = name;
+                std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
+                std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
+                if (name_lower.find(filter) == std::string::npos) continue;
+            }
+
+            bool is_selected = (selected_bot_id_ == bot->getId());
+            bool is_online = bot->isOnline() || bot->isConnected();
+
+            ImVec4 text_col = is_online ? ImVec4(0.18f, 0.95f, 0.40f, 1.0f) : ImVec4(0.65f, 0.70f, 0.75f, 1.0f);
+
+            if (is_selected) {
+                ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.06f, 0.28f, 0.48f, 0.90f));
+                ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.08f, 0.35f, 0.58f, 0.95f));
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+                ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.05f, 0.15f, 0.25f, 0.50f));
+            }
+
+            ImGui::PushStyleColor(ImGuiCol_Text, text_col);
+
+            std::string label = name + "##bot_" + std::to_string(bot->getId());
+            if (ImGui::Selectable(label.c_str(), is_selected)) {
+                selected_bot_id_ = bot->getId();
+            }
+
+            ImGui::PopStyleColor(3);
+        }
+    }
+
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+
+    ImGui::Spacing();
+
+    // Search bar
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##BotSearch", "Search for bots..", bot_search_, sizeof(bot_search_));
+
+    // Buttons: Load | Save
+    float btn_w = (width - 24.0f) * 0.5f;
+    if (ImGui::Button("Load", ImVec2(btn_w, 22.0f))) {
+        if (bot_manager_) bot_manager_->loadAccountsFromFile(accounts_file_path_);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Save", ImVec2(btn_w, 22.0f))) {
+        if (bot_manager_) bot_manager_->saveAccountsToFile(accounts_file_path_);
+    }
+
+    // Add Bot button
+    if (ImGui::Button("Add Bot", ImVec2(-1, 22.0f))) {
+        ImGui::OpenPopup("AddBotPopupModal");
+    }
+
+    // Remove Bot button
+    if (ImGui::Button("Remove Bot", ImVec2(-1, 22.0f))) {
+        if (bot_manager_ && selected_bot_id_ > 0) {
+            bot_manager_->removeBot(selected_bot_id_);
+            auto remaining = bot_manager_->getBots();
+            if (!remaining.empty()) selected_bot_id_ = remaining[0]->getId();
+            else selected_bot_id_ = 0;
+        }
+    }
+
+    // Modal Add Bot
+    if (ImGui::BeginPopupModal("AddBotPopupModal", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Tambah Bot Baru ke List:");
+        ImGui::Separator();
+        ImGui::InputText("GrowID / Username", new_bot_user_, sizeof(new_bot_user_));
+        ImGui::InputText("Password", new_bot_pass_, sizeof(new_bot_pass_), ImGuiInputTextFlags_Password);
+        ImGui::InputText("Target World", new_bot_world_, sizeof(new_bot_world_));
+
+        ImGui::Spacing();
+        if (ImGui::Button("Tambahkan", ImVec2(120, 0))) {
+            if (strlen(new_bot_user_) > 0 && bot_manager_) {
+                auto b = bot_manager_->addBot(new_bot_user_, new_bot_pass_, new_bot_world_);
+                if (b) selected_bot_id_ = b->getId();
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Batal", ImVec2(100, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    ImGui::EndChild();
+}
+
+void LuciferGui::renderSubTabMain(float width, float height) {
+    float card_w = (width - 8.0f) * 0.5f;
+    float card_h = (height - 8.0f) * 0.5f;
+
+    // Row 1: Bot Information (Top-Left) & Movement (Top-Right)
+    renderCardBotInfo(card_w, card_h);
+    ImGui::SameLine();
+    renderCardMovement(card_w, card_h);
+
+    ImGui::Spacing();
+
+    // Row 2: Preferences (Bottom-Left) & Intervals (Bottom-Right)
+    renderCardPreferences(card_w, card_h);
+    ImGui::SameLine();
+    renderCardIntervals(card_w, card_h);
+}
+
+void LuciferGui::renderCardBotInfo(float w, float h) {
+    ImGui::BeginChild("CardBotInfo", ImVec2(w, h), true);
+
+    ImGui::TextColored(ImVec4(0.85f, 0.95f, 1.0f, 1.0f), "👤 Bot Information");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    std::shared_ptr<BotInstance> bot = (bot_manager_ && selected_bot_id_ > 0)
+        ? bot_manager_->getBotById(selected_bot_id_) : nullptr;
+
+    bool is_online = bot ? bot->isOnline() : enet_.isConnected();
+    int ping = bot ? bot->getPing() : enet_.getPing();
+    float px = 0, py = 0;
+    int tx = 0, ty = 0;
+    std::string wname;
+    int gems = 0;
+
+    if (bot) {
+        bot->getWorld().getLocalPos(px, py, tx, ty);
+        wname = bot->getWorld().getWorldName();
+        gems = bot->getWorld().getItemCount(112);
+    } else {
+        world_.getLocalPos(px, py, tx, ty);
+        wname = world_.getWorldName();
+        gems = world_.getItemCount(112);
+    }
+
+    if (wname.empty()) wname = "XOGAVOHAT";
+    std::string wname_upper = wname;
+    std::transform(wname_upper.begin(), wname_upper.end(), wname_upper.begin(), ::toupper);
+
+    // 1. Status: Online [37?]
+    ImGui::Text("Status: ");
+    ImGui::SameLine();
+    if (is_online) {
+        ImGui::TextColored(ImVec4(0.18f, 0.95f, 0.40f, 1.0f), "Online");
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.85f, 0.25f, 0.25f, 1.0f), " [%d]", ping > 0 ? ping : 37);
+    } else {
+        ImGui::TextColored(ImVec4(0.85f, 0.30f, 0.30f, 1.0f), "Offline");
+    }
+
+    // 2. Google: Idle
+    ImGui::Text("Google: ");
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.18f, 0.95f, 0.40f, 1.0f), "Idle");
+
+    // 3. Level: 1, Gems: 0
+    ImGui::Text("Level: 1, Gems: %d", gems);
+
+    // 4. World: XOGAVOHAT (45, 23)
+    ImGui::Text("World: %s (%d, %d)", wname_upper.c_str(), tx > 0 ? tx : 45, ty > 0 ? ty : 23);
+
+    // 5. Played 0.00 hours. Age 0 days.
+    ImGui::Text("Played 0.00 hours. Age 0 days.");
+
+    ImGui::Spacing();
+    ImGui::Spacing();
+
+    // Inputs: World Name + Leave + Warp
+    ImGui::SetNextItemWidth(w - 150.0f);
+    ImGui::InputTextWithHint("##WorldInput", "World Name", warp_input_, sizeof(warp_input_));
+    ImGui::SameLine();
+    if (ImGui::Button("Leave", ImVec2(60, 22))) {
+        if (bot) bot->say("/quit");
+        else actions_.say("/quit");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Warp", ImVec2(60, 22))) {
+        if (strlen(warp_input_) > 0) {
+            if (bot) bot->warp(warp_input_);
+            else actions_.warp(warp_input_);
+        }
+    }
+
+    ImGui::Spacing();
+
+    // Connect & Disconnect buttons
+    float btn_half = (w - 24.0f) * 0.5f;
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.00f, 0.42f, 0.70f, 0.90f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.00f, 0.52f, 0.85f, 1.00f));
+    if (ImGui::Button("Connect", ImVec2(btn_half, 26.0f))) {
+        if (bot) bot->start();
+        else if (reconnect_fn_) reconnect_fn_();
+    }
+    ImGui::PopStyleColor(2);
+
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.05f, 0.14f, 0.24f, 0.90f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.70f, 0.20f, 0.25f, 1.00f));
+    if (ImGui::Button("Disconnect", ImVec2(btn_half, 26.0f))) {
+        if (bot) bot->stop();
+        else enet_.disconnect();
+    }
+    ImGui::PopStyleColor(2);
+
+    ImGui::EndChild();
+}
+
+void LuciferGui::renderCardMovement(float w, float h) {
+    ImGui::BeginChild("CardMovement", ImVec2(w, h), true);
+
+    ImGui::TextColored(ImVec4(0.85f, 0.95f, 1.0f, 1.0f), "✥ Movement");
+    ImGui::SameLine(w - 85.0f);
+    if (ImGui::Button("Respawn", ImVec2(75.0f, 20.0f))) {
+        std::shared_ptr<BotInstance> bot = (bot_manager_ && selected_bot_id_ > 0)
+            ? bot_manager_->getBotById(selected_bot_id_) : nullptr;
+        if (bot) bot->respawn();
+        else actions_.respawn();
+    }
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    std::shared_ptr<BotInstance> bot = (bot_manager_ && selected_bot_id_ > 0)
+        ? bot_manager_->getBotById(selected_bot_id_) : nullptr;
+
+    float px = 0, py = 0;
+    int tx = 0, ty = 0;
+    if (bot) bot->getWorld().getLocalPos(px, py, tx, ty);
+    else world_.getLocalPos(px, py, tx, ty);
+
+    // Centered Cross D-Pad
+    float btn_size_w = 40.0f;
+    float btn_size_h = 34.0f;
+    float center_x = w * 0.5f;
+
+    // Up:
+    ImGui::SetCursorPosX(center_x - btn_size_w * 0.5f);
+    if (ImGui::Button("↑##DpadUp", ImVec2(btn_size_w, btn_size_h))) {
+        if (bot) bot->moveTo(tx, ty - move_step_);
+        else actions_.moveTo(tx, ty - move_step_);
+    }
+
+    // Mid row: Left, Center (Door/Enter), Right
+    ImGui::SetCursorPosX(center_x - btn_size_w * 1.5f - 4.0f);
+    if (ImGui::Button("←##DpadLeft", ImVec2(btn_size_w, btn_size_h))) {
+        if (bot) bot->moveTo(tx - move_step_, ty);
+        else actions_.moveTo(tx - move_step_, ty);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("🚪##DpadEnter", ImVec2(btn_size_w, btn_size_h))) {
+        if (bot) bot->getActions().enter();
+        else actions_.enter();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("→##DpadRight", ImVec2(btn_size_w, btn_size_h))) {
+        if (bot) bot->moveTo(tx + move_step_, ty);
+        else actions_.moveTo(tx + move_step_, ty);
+    }
+
+    // Down:
+    ImGui::SetCursorPosX(center_x - btn_size_w * 0.5f);
+    if (ImGui::Button("↓##DpadDown", ImVec2(btn_size_w, btn_size_h))) {
+        if (bot) bot->moveTo(tx, ty + move_step_);
+        else actions_.moveTo(tx, ty + move_step_);
+    }
+
+    ImGui::Spacing();
+
+    // Step selector below D-pad (small indicator, number 1, gear)
+    ImGui::SetCursorPosX(center_x - 55.0f);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.04f, 0.10f, 0.17f, 1.0f));
+    ImGui::Button("■##sq", ImVec2(20, 20));
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(45.0f);
+    ImGui::SliderInt("##Step", &move_step_, 1, 10);
+    ImGui::SameLine();
+    ImGui::Button("⚙️##step_gear", ImVec2(22, 20));
+
+    ImGui::EndChild();
+}
+
+void LuciferGui::renderCardPreferences(float w, float h) {
+    ImGui::BeginChild("CardPreferences", ImVec2(w, h), true);
+
+    ImGui::TextColored(ImVec4(0.85f, 0.95f, 1.0f, 1.0f), "⚙️ Preferences");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Row 1: Bypass Logon
+    ImGui::Text("Bypass Logon");
+    ImGui::SameLine(w - 75.0f);
+    ImGui::SmallButton("⚙️##pref1");
+    ImGui::SameLine();
+    ToggleSwitch("BypassLogonToggle", &pref_bypass_logon_);
+
+    ImGui::Spacing();
+
+    // Row 2: Auto Reconnect [9.4]
+    if (reconnect_ctrl_.getState() == ReconnectState::WaitingReconnect) {
+        ImGui::Text("Auto Reconnect [%.1f]", (float)reconnect_ctrl_.getSecondsRemaining());
+    } else {
+        ImGui::Text("Auto Reconnect [9.4]");
+    }
+    ImGui::SameLine(w - 75.0f);
+    ImGui::SmallButton("⚙️##pref2");
+    ImGui::SameLine();
+    ToggleSwitch("AutoReconnectToggle", &pref_auto_reconnect_);
+
+    ImGui::Spacing();
+
+    // Row 3: Auto Collect
+    ImGui::Text("Auto Collect");
+    ImGui::SameLine(w - 75.0f);
+    ImGui::SmallButton("⚙️##pref3");
+    ImGui::SameLine();
+    ToggleSwitch("AutoCollectToggle", &pref_auto_collect_);
+
+    ImGui::Spacing();
+
+    // Row 4: Auto Accept
+    ImGui::Text("Auto Accept");
+    ImGui::SameLine(w - 75.0f);
+    ImGui::SmallButton("⚙️##pref4");
+    ImGui::SameLine();
+    ToggleSwitch("AutoAcceptToggle", &pref_auto_accept_);
+
+    ImGui::Spacing();
+
+    // Row 5: Auto Disconnect On Mod
+    ImGui::Text("Auto Disconnect On Mod");
+    ImGui::SameLine(w - 75.0f);
+    ImGui::SmallButton("⚙️##pref5");
+    ImGui::SameLine();
+    ToggleSwitch("AutoDisconnectModToggle", &pref_auto_mod_disconnect_);
+
+    ImGui::EndChild();
+}
+
+void LuciferGui::renderCardIntervals(float w, float h) {
+    ImGui::BeginChild("CardIntervals", ImVec2(w, h), true);
+
+    ImGui::TextColored(ImVec4(0.85f, 0.95f, 1.0f, 1.0f), "🕒 Intervals");
+    ImGui::SameLine(w - 140.0f);
+    ImGui::TextDisabled("Dynamic Delay");
+    ImGui::SameLine();
+    ToggleSwitch("DynamicDelayToggle", &dynamic_delay_);
+
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // 1. Move
+    ImGui::Checkbox("##cb_move", &interval_move_enabled_);
+    ImGui::SameLine();
+    ImGui::Text("Move - %.3fs (+%.3fs)", interval_move_base_, interval_move_jitter_);
+
+    ImGui::Spacing();
+
+    // 2. Collect
+    ImGui::Checkbox("##cb_collect", &interval_collect_enabled_);
+    ImGui::SameLine();
+    ImGui::Text("Collect - %.3fs (+%.3fs)", interval_collect_base_, interval_collect_jitter_);
+
+    ImGui::Spacing();
+
+    // 3. Hit
+    ImGui::Checkbox("##cb_hit", &interval_hit_enabled_);
+    ImGui::SameLine();
+    ImGui::Text("Hit - %.3fs (+%.3fs)", interval_hit_base_, interval_hit_jitter_);
+
+    ImGui::Spacing();
+
+    // 4. Place
+    ImGui::Checkbox("##cb_place", &interval_place_enabled_);
+    ImGui::SameLine();
+    ImGui::Text("Place - %.3fs (+%.3fs)", interval_place_base_, interval_place_jitter_);
+
+    ImGui::EndChild();
+}
+
+void LuciferGui::renderTabList() {
+    renderTabMultiBot();
+}
+
+void LuciferGui::renderTabExecutor() {
+    renderTabScriptEditor();
+}
+
+void LuciferGui::renderTabProxy() {
+    renderTabAntiDetection();
+}
+
+void LuciferGui::renderTabSwitch() {
+    ImGui::BeginChild("SwitchCard", ImVec2(0, 0), true);
+    ImGui::TextColored(ImVec4(0.85f, 0.95f, 1.0f, 1.0f), "🔀 Sub-Server Redirection & World Switcher");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::Text("Peralihan Cepat Sub-Server / World:");
+    ImGui::SetNextItemWidth(250.0f);
+    ImGui::InputTextWithHint("##QuickSwitchWorld", "Target World...", warp_input_, sizeof(warp_input_));
+    ImGui::SameLine();
+    if (ImGui::Button("🚀 Switch World Sekarang", ImVec2(180, 24))) {
+        if (strlen(warp_input_) > 0) {
+            actions_.warp(warp_input_);
+        }
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::Text("Server Redirection Status:");
+    ImGui::BulletText("Host Aktif: %s:%d", info_.game_host.c_str(), info_.game_port);
+    ImGui::BulletText("Current Sub-Server Token: %d", enet_.isConnected() ? 1 : 0);
+    ImGui::BulletText("Reconnect Status: %s", reconnect_ctrl_.getStateString().c_str());
+
+    ImGui::Spacing();
+    if (ImGui::Button("🔄 Force Disconnect & Fast Reconnect", ImVec2(280, 28))) {
+        if (reconnect_fn_) reconnect_fn_();
+    }
+    ImGui::EndChild();
+}
+
+void LuciferGui::renderTabDatabase() {
+    ImGui::BeginChild("DatabaseCard", ImVec2(0, 0), true);
+    ImGui::TextColored(ImVec4(0.85f, 0.95f, 1.0f, 1.0f), "🗄️ Growtopia Items Database Cache");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    static char search_item[64] = "";
+    ImGui::SetNextItemWidth(300.0f);
+    ImGui::InputTextWithHint("##ItemSearch", "Search item name or ID...", search_item, sizeof(search_item));
+
+    ImGui::Spacing();
+    struct ItemEntry { int id; const char* name; const char* type; int grow_sec; int rarity; };
+    static const ItemEntry sample_db[] = {
+        { 2, "Dirt", "Block", 31, 1 },
+        { 3, "Dirt Seed", "Seed", 31, 1 },
+        { 4, "Granite", "Block", 100, 2 },
+        { 5, "Granite Seed", "Seed", 100, 2 },
+        { 8, "Bedrock", "Block", 0, 999 },
+        { 18, "Wooden Platform", "Platform", 60, 2 },
+        { 26, "Door", "Door", 120, 2 },
+        { 32, "Rock Background", "Background", 45, 1 },
+        { 242, "World Lock", "Lock", 0, 100 },
+        { 456, "Laser Grid", "Farmable Block", 345600, 48 },
+        { 5666, "Pepper Tree", "Farmable Seed", 259200, 40 },
+        { 8270, "Chand", "Farmable Block", 604800, 75 }
+    };
+
+    if (ImGui::BeginTable("ItemDbTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+        ImGui::TableSetupColumn("Item Name", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 140.0f);
+        ImGui::TableSetupColumn("Grow Time", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+        ImGui::TableSetupColumn("Rarity", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+        ImGui::TableHeadersRow();
+
+        for (const auto& itm : sample_db) {
+            if (strlen(search_item) > 0) {
+                std::string s = search_item;
+                std::string n = itm.name;
+                std::string id_s = std::to_string(itm.id);
+                std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+                std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+                if (n.find(s) == std::string::npos && id_s.find(s) == std::string::npos) continue;
+            }
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::Text("%d", itm.id);
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextColored(ImVec4(0.20f, 0.95f, 0.45f, 1.0f), "%s", itm.name);
+            ImGui::TableSetColumnIndex(2);
+            ImGui::Text("%s", itm.type);
+            ImGui::TableSetColumnIndex(3);
+            if (itm.grow_sec > 0) ImGui::Text("%ds", itm.grow_sec);
+            else ImGui::TextDisabled("-");
+            ImGui::TableSetColumnIndex(4);
+            ImGui::Text("%d", itm.rarity);
+        }
+        ImGui::EndTable();
+    }
+    ImGui::EndChild();
+}
+
+void LuciferGui::renderSubTabWorld() {
+    renderTabWorld();
+}
+
+void LuciferGui::renderSubTabInventory() {
+    renderTabInventory();
+}
+
+void LuciferGui::renderSubTabConsole() {
+    renderTabConsole();
+}
+
+void LuciferGui::renderSubTabAutomation() {
+    ImGui::BeginChild("AutomationCard", ImVec2(0, 0), true);
+    ImGui::TextColored(ImVec4(0.85f, 0.95f, 1.0f, 1.0f), "⚡ Automation & Auto-Farm");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    static int farm_tx = 0, farm_ty = 0;
+    static int punch_count = 3;
+    static int farm_block_id = 456;
+
+    ImGui::Text("Status Auto-Farm: %s", autofarm_.isRunning() ? "ACTIVE (SEDANG MENAMBANG)" : "STOPPED");
+    ImGui::Spacing();
+
+    ImGui::SetNextItemWidth(120);
+    ImGui::InputInt("Tile X", &farm_tx);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(120);
+    ImGui::InputInt("Tile Y", &farm_ty);
+    ImGui::SameLine();
+    if (ImGui::Button("📍 Ambil Posisi Bot", ImVec2(140, 22))) {
+        float px, py;
+        world_.getLocalPos(px, py, farm_tx, farm_ty);
+    }
+
+    ImGui::SetNextItemWidth(120);
+    ImGui::InputInt("Block Item ID", &farm_block_id);
+    ImGui::SetNextItemWidth(120);
+    ImGui::InputInt("Pukul per Siklus", &punch_count);
+
+    ImGui::Spacing();
+    if (!autofarm_.isRunning()) {
+        if (ImGui::Button("▶️ Mulai Auto-Farm", ImVec2(180, 28))) {
+            autofarm_.start(farm_tx, farm_ty, punch_count, farm_block_id);
+        }
+    } else {
+        if (ImGui::Button("🛑 Hentikan Auto-Farm", ImVec2(180, 28))) {
+            autofarm_.stop();
+        }
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::Text("Quick Automation:");
+    if (ImGui::Button("🧲 Auto Collect Sekitar", ImVec2(200, 24))) {
+        actions_.collectNearby(collect_radius_);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("🚪 Auto Enter Pintu / Portal", ImVec2(220, 24))) {
+        actions_.enter();
+    }
+
+    ImGui::EndChild();
+}
+
+void LuciferGui::renderSubTabRotation() {
+    ImGui::BeginChild("RotationCard", ImVec2(0, 0), true);
+    ImGui::TextColored(ImVec4(0.85f, 0.95f, 1.0f, 1.0f), "🔄 World Rotation Manager");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::SetNextItemWidth(180);
+    ImGui::InputTextWithHint("##RotInput", "Nama World...", rotation_world_input_, sizeof(rotation_world_input_));
+    ImGui::SameLine();
+    if (ImGui::Button("➕ Tambah World", ImVec2(130, 22))) {
+        if (strlen(rotation_world_input_) > 0) {
+            rotation_worlds_.push_back(rotation_world_input_);
+            rotation_world_input_[0] = '\0';
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("🧹 Clear List", ImVec2(100, 22))) {
+        rotation_worlds_.clear();
+    }
+
+    ImGui::Spacing();
+    ImGui::Text("Daftar World Rotasi (%zu World):", rotation_worlds_.size());
+    ImGui::BeginChild("RotList", ImVec2(0, 160), true);
+    for (size_t i = 0; i < rotation_worlds_.size(); ++i) {
+        ImGui::BulletText("%zu. %s", i + 1, rotation_worlds_[i].c_str());
+    }
+    ImGui::EndChild();
+
+    ImGui::Spacing();
+    if (!rotation_running_) {
+        if (ImGui::Button("▶️ Mulai Rotasi Massal", ImVec2(200, 28))) {
+            rotation_running_ = true;
+        }
+    } else {
+        if (ImGui::Button("🛑 Hentikan Rotasi", ImVec2(200, 28))) {
+            rotation_running_ = false;
+        }
+    }
+    ImGui::EndChild();
+}
+
+void LuciferGui::renderSubTabLogs() {
+    renderTabConsole();
 }
 
 void LuciferGui::renderTabStatus() {
