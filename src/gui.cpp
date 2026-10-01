@@ -589,16 +589,18 @@ void LuciferGui::renderSidebar(float width, float height) {
     std::vector<std::shared_ptr<BotInstance>> bots;
     if (bot_manager_) {
         bots = bot_manager_->getBots();
-        if (bots.empty() && !info_.account_name.empty()) {
-            bot_manager_->addBot(info_.account_name, "password", cfg_target_world_);
-            bots = bot_manager_->getBots();
-        }
     }
 
     if (bots.empty()) {
-        bool is_online = enet_.isConnected();
-        ImVec4 text_col = is_online ? ImVec4(0.18f, 0.95f, 0.40f, 1.0f) : ImVec4(0.60f, 0.70f, 0.80f, 1.0f);
-        ImGui::TextColored(text_col, "%s", info_.account_name.empty() ? "MyBot" : info_.account_name.c_str());
+        if (!info_.account_name.empty()) {
+            bool is_online = enet_.isConnected();
+            ImVec4 text_col = is_online ? ImVec4(0.18f, 0.95f, 0.40f, 1.0f) : ImVec4(0.60f, 0.70f, 0.80f, 1.0f);
+            ImGui::TextColored(text_col, "%s", info_.account_name.c_str());
+        } else {
+            ImGui::Spacing();
+            ImGui::TextDisabled(" Belum ada bot terdaftar.");
+            ImGui::TextDisabled(" Klik '+ Add Bot' di bawah.");
+        }
     } else {
         for (auto& bot : bots) {
             std::string name = bot->getAccountName();
@@ -681,6 +683,9 @@ void LuciferGui::renderSidebar(float width, float height) {
             if (strlen(new_bot_user_) > 0 && bot_manager_) {
                 auto b = bot_manager_->addBot(new_bot_user_, new_bot_pass_, new_bot_world_);
                 if (b) selected_bot_id_ = b->getId();
+                new_bot_user_[0] = '\0';
+                new_bot_pass_[0] = '\0';
+                new_bot_world_[0] = '\0';
             }
             ImGui::CloseCurrentPopup();
         }
@@ -738,9 +743,10 @@ void LuciferGui::renderCardBotInfo(float w, float h) {
         gems = world_.getItemCount(112);
     }
 
-    if (wname.empty()) wname = "XOGAVOHAT";
-    std::string wname_upper = wname;
-    std::transform(wname_upper.begin(), wname_upper.end(), wname_upper.begin(), ::toupper);
+    std::string wname_upper = wname.empty() ? "-" : wname;
+    if (!wname.empty()) {
+        std::transform(wname_upper.begin(), wname_upper.end(), wname_upper.begin(), ::toupper);
+    }
 
     // 1. Status: Online [37?]
     ImGui::Text("Status: ");
@@ -761,8 +767,8 @@ void LuciferGui::renderCardBotInfo(float w, float h) {
     // 3. Level: 1, Gems: 0
     ImGui::Text("Level: 1, Gems: %d", gems);
 
-    // 4. World: XOGAVOHAT (45, 23)
-    ImGui::Text("World: %s (%d, %d)", wname_upper.c_str(), tx > 0 ? tx : 45, ty > 0 ? ty : 23);
+    // 4. World: NAME (X, Y)
+    ImGui::Text("World: %s (%d, %d)", wname_upper.c_str(), tx, ty);
 
     // 5. Played 0.00 hours. Age 0 days.
     ImGui::Text("Played 0.00 hours. Age 0 days.");

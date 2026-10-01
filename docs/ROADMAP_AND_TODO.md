@@ -73,6 +73,14 @@ Di bawah ini adalah kumpulan masalah non-sepele dalam reverse-engineering dan pe
 - **Masalah**: Kompilasi MSVC menghasilkan error `C2039: 'function': is not a member of 'std'` pada header `gui.hpp`.
 - **Solusi**: Sertakan header `<functional>` secara eksplisit di awal file header sebelum mendeklarasikan alias callback GUI.
 
+### 7. Mode Standalone Multi-Bot Tanpa Akun Default di `.env`
+- **Masalah**: Ketika kredensial `ACCOUNT_NAME` di `.env` dikosongkan, bot sebelumnya langsung keluar (*exit code 1*) dan menolak membuka jendela antarmuka GUI.
+- **Solusi**:
+  1. Buat parameter `acc_name`, `acc_pass`, dan `target_world` bersifat opsional di `src/main.cpp`.
+  2. Apabila `acc_name.empty()`, lewati tahapan HTTP Login tunggal dan koneksi awal ENet, lalu langsung buka jendela GUI Lucifer v2.85 (DirectX 11).
+  3. Kelola penambahan bot secara dinamis melalui file `accounts.txt` atau tombol modal **"+ Add Bot"** di sidebar GUI.
+  4. Bersihkan buffer input modal secara otomatis setelah penambahan bot berhasil.
+
 ---
 
 ## 🛠️ Panduan Debugging & Troubleshooting

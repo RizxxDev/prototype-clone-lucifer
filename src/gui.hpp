@@ -136,7 +136,7 @@ public:
     int move_step_ = 1; // 1 tile per click/keypress
 
     // Navigation & Quick Actions
-    char warp_input_[64] = "riziq";
+    char warp_input_[64] = "";
     char chat_input_[256] = "";
     float collect_radius_ = 4.0f;
 

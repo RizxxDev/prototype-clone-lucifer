@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
     std::string version    = "5.58";
     std::string platform   = "windows";
     int         protocol   = 225;
-    std::string target_world = "riziq";
+    std::string target_world = "";
 
     bool loaded = false;
 
@@ -106,41 +106,40 @@ int main(int argc, char** argv) {
 
     if (!loaded) {
         Logger::log("[!] File konfigurasi (.env atau config.json) tidak ditemukan!");
-        Logger::log("    Salin .env.example menjadi .env lalu isi data akun.");
-        return 1;
-    }
-
-    if (acc_name.empty()) {
-        Logger::log("[!] Isi dulu ACCOUNT_NAME di .env");
+        Logger::log("    Salin .env.example menjadi .env lalu isi data server.");
         return 1;
     }
 
     Logger::log("[*] Konfigurasi:");
     Logger::log("    Login URL    : ", login_url);
     Logger::log("    Game         : ", game_host, ":", game_port);
-    Logger::log("    Akun         : ", acc_name);
+    Logger::log("    Akun Default : ", acc_name.empty() ? "(Belum diatur / Standalone Multi-Bot mode)" : acc_name);
     Logger::log("    Target World : ", target_world.empty() ? "(none)" : target_world);
 
     // ---- Fase 1a: HTTP Login ----
-    Logger::log("\n--- FASE 1a: HTTP Login ---");
+    LoginResponse login_resp{};
+    if (!acc_name.empty()) {
+        Logger::log("\n--- FASE 1a: HTTP Login ---");
 
-    HttpClient http(login_url, use_https);
-    LoginResponse login_resp = http.login(acc_name, acc_pass,
-                                          version, platform);
+        HttpClient http(login_url, use_https);
+        login_resp = http.login(acc_name, acc_pass, version, platform);
 
-    if (!login_resp.success) {
-        Logger::log("[!] Login HTTP GAGAL");
-        Logger::log("    Error: ", login_resp.error);
-        return 1;
-    }
+        if (!login_resp.success) {
+            Logger::log("[!] Login HTTP GAGAL");
+            Logger::log("    Error: ", login_resp.error);
+            return 1;
+        }
 
-    Logger::log("[+] HTTP login OK");
+        Logger::log("[+] HTTP login OK");
 
-    if (!login_resp.server_ip.empty()) {
-        game_host = login_resp.server_ip;
-    }
-    if (login_resp.server_port > 0) {
-        game_port = login_resp.server_port;
+        if (!login_resp.server_ip.empty()) {
+            game_host = login_resp.server_ip;
+        }
+        if (login_resp.server_port > 0) {
+            game_port = login_resp.server_port;
+        }
+    } else {
+        Logger::log("\n[*] Tidak ada akun default di .env. Membuka GUI Lucifer Standalone...");
     }
 
     // ---- Fase 1b & 2: ENet Connect & Lucifer State Engine ----
@@ -155,7 +154,7 @@ int main(int argc, char** argv) {
 
         // Anti-Detection & Device Fingerprint
         AntiDetection::init();
-        DeviceFingerprint fingerprint = DeviceFingerprint::getOrCreateForAccount(acc_name);
+        DeviceFingerprint fingerprint = DeviceFingerprint::getOrCreateForAccount(acc_name.empty() ? "default" : acc_name);
         ReconnectController reconnect_ctrl(2000, 2.0f, 30000, 0.15f);
 
         auto build_handshake = [&](const std::string& meta_str, int user_id = 0, int token = 0, const std::string& door_id = "", int lmode = -1) -> std::string {
@@ -197,6 +196,7 @@ int main(int argc, char** argv) {
         std::atomic<bool> in_world{false};
 
         std::function<void()> do_reconnect = [&]() {
+            if (acc_name.empty()) return;
             if (redirecting.load()) return;
             Logger::log("[*] 🔄 Menjalankan proses Auto-Reconnect...");
             enet.disconnect();
@@ -230,7 +230,7 @@ int main(int argc, char** argv) {
         };
 
         enet.onDisconnect([&]() {
-            if (!redirecting.load()) {
+            if (!acc_name.empty() && !redirecting.load()) {
                 in_world = false;
                 reconnect_ctrl.onDisconnected("Koneksi ENet terputus dari server");
             }
@@ -506,11 +506,13 @@ int main(int argc, char** argv) {
             }
         });
 
-        if (!enet.connect(game_host, game_port, 5000)) {
-            Logger::log("[!] Gagal connect ENet ke ", game_host, ":", game_port);
-            Logger::log("    Cek: server GTPS ENet jalan? port benar? firewall?");
-            Logger::log("    Auto-reconnect akan mencoba menyambung ulang...");
-            reconnect_ctrl.onDisconnected("Gagal koneksi awal ENet");
+        if (!acc_name.empty()) {
+            if (!enet.connect(game_host, game_port, 5000)) {
+                Logger::log("[!] Gagal connect ENet ke ", game_host, ":", game_port);
+                Logger::log("    Cek: server GTPS ENet jalan? port benar? firewall?");
+                Logger::log("    Auto-reconnect akan mencoba menyambung ulang...");
+                reconnect_ctrl.onDisconnected("Gagal koneksi awal ENet");
+            }
         }
 
         BotInfo info{acc_name, version, platform, game_host, game_port};
@@ -527,8 +529,10 @@ int main(int argc, char** argv) {
         bot_manager.default_platform = platform;
         bot_manager.default_protocol = protocol;
 
-        // Daftarkan akun utama ke manager
-        bot_manager.addBot(acc_name, acc_pass, target_world);
+        // Daftarkan akun utama ke manager jika dikonfigurasi
+        if (!acc_name.empty()) {
+            bot_manager.addBot(acc_name, acc_pass, target_world);
+        }
 
         // Muat akun tambahan dari accounts.txt jika tersedia
         if (std::filesystem::exists("accounts.txt")) {
