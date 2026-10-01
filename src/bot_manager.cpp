@@ -146,7 +146,7 @@ bool BotManager::loadAccountsFromFile(const std::string& filepath) {
         }
         if (line.empty() || line[0] == '#') continue;
 
-        // Format: GrowID:Password[:TargetWorld][:ProxyHost:ProxyPort[:ProxyUser:ProxyPass]]
+        // Format: GrowID[:Password][:TargetWorld][:ProxyHost:ProxyPort[:ProxyUser:ProxyPass]]
         std::stringstream ss(line);
         std::vector<std::string> parts;
         std::string part;
@@ -154,10 +154,23 @@ bool BotManager::loadAccountsFromFile(const std::string& filepath) {
             parts.push_back(part);
         }
 
-        if (parts.size() >= 2) {
+        if (!parts.empty() && !parts[0].empty()) {
             std::string user = parts[0];
-            std::string pass = parts[1];
+            std::string pass = parts.size() >= 2 ? parts[1] : "";
             std::string world = parts.size() >= 3 ? parts[2] : "";
+
+            // Cek apakah bot dengan GrowID ini sudah ada dalam pool
+            bool already_exists = false;
+            {
+                std::lock_guard<std::mutex> lock(mtx_);
+                for (const auto& b : bots_) {
+                    if (b->getAccountName() == user) {
+                        already_exists = true;
+                        break;
+                    }
+                }
+            }
+            if (already_exists) continue;
 
             Socks5Config proxy;
             if (parts.size() >= 5) {
@@ -188,6 +201,26 @@ bool BotManager::saveAccountsToFile(const std::string& filepath) {
         }
     } catch (...) {}
 
+    // PROTEKSI: Jika memory bots_ kosong (0 bot), JANGAN timpa file jika file sudah ada dan memiliki akun tersimpan!
+    if (bots_.empty()) {
+        if (std::filesystem::exists(filepath)) {
+            std::ifstream check(filepath);
+            std::string line;
+            bool has_existing = false;
+            while (std::getline(check, line)) {
+                while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' ')) line.pop_back();
+                if (!line.empty() && line[0] != '#') {
+                    has_existing = true;
+                    break;
+                }
+            }
+            if (has_existing) {
+                Logger::log("[MANAGER] ℹ️ File akun ", filepath, " tidak ditimpa karena pool bot di memory kosong.");
+                return true;
+            }
+        }
+    }
+
     std::ofstream file(filepath);
     if (!file.is_open()) return false;
 
@@ -203,7 +236,7 @@ bool BotManager::saveAccountsToFile(const std::string& filepath) {
         file << "\n";
     }
 
-    Logger::log("[MANAGER] 💾 Daftar akun disimpan ke: ", filepath);
+    Logger::log("[MANAGER] 💾 Daftar akun (", bots_.size(), " bot) disimpan ke: ", filepath);
     return true;
 }
 

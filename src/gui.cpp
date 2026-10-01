@@ -595,6 +595,9 @@ void LuciferGui::renderSidebar(float width, float height) {
     if (bot_manager_) {
         bots = bot_manager_->getBots();
     }
+    if (selected_bot_id_ <= 0 && !bots.empty()) {
+        selected_bot_id_ = bots[0]->getId();
+    }
 
     if (bots.empty()) {
         if (!info_.account_name.empty()) {
@@ -799,7 +802,11 @@ void LuciferGui::renderCardBotInfo(float w, float h) {
     ImGui::SameLine();
     if (ImGui::Button("Warp", ImVec2(60, 22))) {
         if (strlen(warp_input_) > 0) {
-            if (bot) bot->warp(warp_input_);
+            if (bot) {
+                bot->warp(warp_input_);
+                bot->setTargetWorld(warp_input_);
+                if (bot_manager_) bot_manager_->saveAccountsToFile(accounts_file_path_);
+            }
             else actions_.warp(warp_input_);
         }
     }
@@ -1467,8 +1474,8 @@ void LuciferGui::renderTabMultiBot() {
     auto sel_bot = bot_manager_->getBotById(selected_bot_id_);
     if (sel_bot) {
         ImGui::Spacing();
-        ImGui::BeginChild("SelectedBotDetail", ImVec2(0, 140), true);
-        ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.30f, 1.0f), "🔎 DETAIL BOT TERPILIH: #%d (%s)",
+        ImGui::BeginChild("SelectedBotDetail", ImVec2(0, 185), true);
+        ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.30f, 1.0f), "🔎 DETAIL & PENGATURAN BOT: #%d (%s)",
                            sel_bot->getId(), sel_bot->getAccountName().c_str());
         ImGui::Separator();
         ImGui::Spacing();
@@ -1480,8 +1487,38 @@ void LuciferGui::renderTabMultiBot() {
                     sel_bot->getFingerprint().country.c_str());
 
         ImGui::Spacing();
+
+        // Editor Password & Target World
+        static char edit_pass[64] = "";
+        static char edit_world[64] = "";
+        static int last_edit_id = -1;
+        if (last_edit_id != sel_bot->getId()) {
+            last_edit_id = sel_bot->getId();
+            strncpy_s(edit_pass, sel_bot->getPassword().c_str(), sizeof(edit_pass) - 1);
+            strncpy_s(edit_world, sel_bot->getTargetWorld().c_str(), sizeof(edit_world) - 1);
+        }
+
+        ImGui::SetNextItemWidth(140);
+        ImGui::InputText("Password", edit_pass, sizeof(edit_pass), ImGuiInputTextFlags_Password);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(130);
+        ImGui::InputText("Target World", edit_world, sizeof(edit_world));
+        ImGui::SameLine();
+        if (ImGui::Button("💾 Simpan Akun", ImVec2(120, 22))) {
+            sel_bot->setPassword(edit_pass);
+            sel_bot->setTargetWorld(edit_world);
+            bot_manager_->saveAccountsToFile(accounts_file_path_);
+            Logger::log("[MANAGER] ✅ Kredensial bot '", sel_bot->getAccountName(), "' diperbarui & disimpan ke ", accounts_file_path_);
+        }
+
+        ImGui::Spacing();
         if (ImGui::Button("🚀 Warp Bot Ini", ImVec2(130, 24))) {
-            if (!sel_bot->getTargetWorld().empty()) sel_bot->warp(sel_bot->getTargetWorld());
+            std::string tw = strlen(edit_world) > 0 ? edit_world : sel_bot->getTargetWorld();
+            if (!tw.empty()) {
+                sel_bot->setTargetWorld(tw);
+                sel_bot->warp(tw);
+                bot_manager_->saveAccountsToFile(accounts_file_path_);
+            }
         }
         ImGui::SameLine();
         if (ImGui::Button("🧲 Collect Sekitar", ImVec2(130, 24))) {

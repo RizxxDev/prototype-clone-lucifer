@@ -556,6 +556,22 @@ int main(int argc, char** argv) {
             bot_manager.saveAccountsToFile("cache/accounts.txt");
         }
 
+        // Pemulihan otomatis (Auto-Recovery) jika list bot masih kosong tetapi ada profil akun tersimpan
+        if (bot_manager.getBots().empty() && std::filesystem::exists("cache/fingerprints")) {
+            for (const auto& entry : std::filesystem::directory_iterator("cache/fingerprints")) {
+                if (entry.is_regular_file() && entry.path().extension() == ".json") {
+                    std::string stem = entry.path().stem().string();
+                    if (stem != "default" && !stem.empty()) {
+                        Logger::log("[MANAGER] 🔄 Menemukan profil fingerprint '", stem, "', memulihkan akun ke daftar...");
+                        bot_manager.addBot(stem, "", "");
+                    }
+                }
+            }
+            if (!bot_manager.getBots().empty()) {
+                bot_manager.saveAccountsToFile("cache/accounts.txt");
+            }
+        }
+
         gui.setBotManager(&bot_manager);
 
         Logger::log("\n========================================================");

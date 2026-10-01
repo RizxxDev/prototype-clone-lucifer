@@ -91,6 +91,17 @@ Di bawah ini adalah kumpulan masalah non-sepele dalam reverse-engineering dan pe
   2. Tambahkan logging lengkap untuk `Server Text`, `Variant Function`, `OnConsoleMessage`, `OnDialogRequest`, dan `NET_MESSAGE_ERROR`.
   3. Tambahkan status `"Lobby"` saat `OnRequestWorldSelectMenu` diterima dan beri tahu pengguna bahwa bot sudah siap untuk di-warp.
 
+### 9. Persistensi Akun & Bug Penimpaan File Kosong (`cache/accounts.txt`)
+- **Masalah**: Akun yang pernah ditambahkan ke bot hilang atau terhapus dari `cache/accounts.txt` ketika program ditutup dan dibuka kembali.
+- **Penyebab**:
+  1. *Empty-Pool Overwrite*: Fungsi `saveAccountsToFile()` dipanggil pada saat shutdown (`LuciferGui::shutdown()` dan akhir `main()`). Jika memori bot bernilai 0 (misalnya karena parser akun sebelumnya terlalu ketat menolak baris tanpa password), `saveAccountsToFile()` membuka file dengan mode truncate `std::ofstream`, menimpa seluruh isi file `cache/accounts.txt` dengan header kosong saja.
+  2. *Strict Parser*: Parser lama mensyaratkan minimal 2 token (`GrowID:Password`), sehingga input nama saja tanpa password diabaikan.
+- **Solusi**:
+  1. Tambahkan proteksi *empty-pool guard* di `saveAccountsToFile()`: jika `bots_.empty()`, sistem memeriksa apakah file tujuan sudah memiliki entri akun. Jika ada, penimpaan dibatalkan.
+  2. Buat parser menerima format fleksibel (`GrowID`, `GrowID:Pass`, `GrowID:Pass:World:...`) dan perbarui password/target world jika ditemukan entri baru.
+  3. Tambahkan fitur *Auto-Recovery*: jika daftar bot di memori kosong saat startup, program otomatis memindai `cache/fingerprints/*.json` untuk memulihkan akun (`<GrowID>`) yang pernah dibuat sebelumnya.
+  4. Sediakan editor kredensial interaktif di GUI (`SelectedBotDetail`) agar pengguna dapat memperbarui dan menyimpan password serta target world langsung ke `cache/accounts.txt`.
+
 ---
 
 ## 🛠️ Panduan Debugging & Troubleshooting

@@ -289,9 +289,13 @@ cache/
    - Menyimpan token `mac`, `rid`, `wk`, `hash`, `fhash`, `fz`, `zf` untuk setiap akun bot secara terisolasi.
    - Dilengkapi sistem migrasi otomatis dari folder legacy `.fingerprints/` bila ditemukan profil lama.
 2. **`cache/accounts.txt`**:
-   - Tempat penyimpanan kredensial akun yang dimasukkan melalui antarmuka GUI (modal *+ Add Bot* / panel *List*).
-   - **Auto-Sync**: Kredensial otomatis tersimpan setiap kali bot ditambahkan, dihapus, atau saat aplikasi ditutup (`LuciferGui::shutdown()`).
-   - Pada startup, aplikasi langsung memuat akun dari `cache/accounts.txt` tanpa mengharuskan input manual.
+   - Tempat penyimpanan kredensial akun yang dimasukkan melalui antarmuka GUI (modal *+ Add Bot* / panel *Multi-Bot* / sidebar).
+   - **Format Baris**: `GrowID[:Password][:TargetWorld][:ProxyHost:ProxyPort[:ProxyUser:ProxyPass]]`.
+   - **Parser Toleran**: Menerima format nama saja (`GrowID`), format nama & sandi (`GrowID:Pass`), serta format lengkap.
+   - **Auto-Sync & Pencegahan Duplikasi**: Kredensial otomatis tersimpan setiap kali bot ditambahkan, dihapus, atau saat aplikasi ditutup (`LuciferGui::shutdown()` & `main()`).
+   - **Proteksi Anti-Wipe (Empty-Pool Guard)**: Fungsi `saveAccountsToFile()` mengecek apakah pool bot di memori kosong. Jika kosong namun file `cache/accounts.txt` sudah ada isinya, sistem menolak menimpa file untuk mencegah data akun terhapus secara tidak sengaja.
+   - **Auto-Recovery dari Fingerprints**: Jika `cache/accounts.txt` kosong atau belum ada, program memindai folder `cache/fingerprints/` dan memulihkan profil akun (`<GrowID>.json`) yang pernah login kembali ke daftar bot dan menyimpannya secara otomatis.
+   - **In-GUI Credential Editor**: Sub-tab Multi-Bot dan card detail bot dilengkapi kolom edit Password & Target World serta tombol simpan langsung ke `cache/accounts.txt`.
 3. **`cache/items.dat`**:
    - Dikelola oleh modul singleton [`ItemDatabase`](file:///c:/Users/RIZIQ/Documents/testtt/src/item_database.hpp).
    - **Auto-Download**: Ketika server mengirim paket tank tipe 16 (`PACKET_SEND_ITEM_DATABASE_DATA`), byte mentah langsung disimpan ke `cache/items.dat` dan didekripsi menggunakan sandi cipher Growtopia (`PBGHF892FASDLFDND`).
