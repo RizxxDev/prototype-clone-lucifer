@@ -102,6 +102,8 @@ private:
     std::string current_handshake_;
     std::string cached_meta_;
     std::string cached_token_;
+    std::string cached_server_ip_;
+    int cached_server_port_ = 0;
 
     mutable std::mutex status_mtx_;
     std::string status_string_ = "Offline";

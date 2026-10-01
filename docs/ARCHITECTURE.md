@@ -253,3 +253,19 @@ Aplikasi menggunakan model thread terdistribusi:
 - `std::shared_ptr` digunakan pada `BotManager` untuk membagikan referensi bot ke antarmuka GUI secara aman.
 - Resource Win32 & DirectX 11 (Device, Context, SwapChain, RenderTargetView, HWND) dibersihkan secara berurutan dalam destructor `LuciferGui::shutdown()`.
 - State Lua runtime dibersihkan melalui `lua_close(L)` dalam destructor `LuaEngine`.
+
+---
+
+## 6. Arsitektur Jaringan, Server-Data Caching & Failover Resilience
+
+### Topologi Pemisahan Web Server & Game Server (GTPS)
+Pada server Growtopia Private Server (GTPS), infrastruktur sering kali dipisahkan menjadi dua mesin/IP yang berbeda:
+1. **Web Host (`server_data.php`)**: Melayani HTTP POST data konfigurasi awal (`server`, `port`, `meta`, `loginurl`).
+2. **Game Host (UDP ENet Server)**: Server inti tempat bot bermain (`51.79.162.77:17013`).
+
+### Mekanisme Failover Caching pada BotInstance
+Ketika web host mengalami *downtime*, rate limiting, atau packet loss:
+1. **Server Detail Caching**: Begitu `server_data.php` berhasil dibaca pada koneksi awal, `BotInstance` menyimpan `cached_server_ip_`, `cached_server_port_`, dan `cached_meta_`.
+2. **Graceful Fallback**: Jika `server_data.php` sewaktu-waktu timeout (misalnya saat reconnect setelah server reboot), bot otomatis menggunakan data cache game server terakhir daripada jatuh ke host web yang mati.
+3. **Konfigurasi Default .env**: Parameter `GTPS_GAME_SERVER` dan `GTPS_GAME_PORT` diarahkan langsung ke game host aktif (`51.79.162.77:17013`) sebagai jaring pengaman awal.
+

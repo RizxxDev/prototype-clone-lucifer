@@ -86,16 +86,32 @@ bool BotInstance::start() {
             HttpClient http(login_url, use_https);
             auto login_resp = http.login(account_name_, password_, version, platform);
             if (login_resp.success) {
-                if (!login_resp.server_ip.empty()) game_host = login_resp.server_ip;
-                if (login_resp.server_port > 0) game_port = login_resp.server_port;
+                if (!login_resp.server_ip.empty()) {
+                    game_host = login_resp.server_ip;
+                    cached_server_ip_ = login_resp.server_ip;
+                }
+                if (login_resp.server_port > 0) {
+                    game_port = login_resp.server_port;
+                    cached_server_port_ = login_resp.server_port;
+                }
                 if (!login_resp.meta.empty()) cached_meta_ = login_resp.meta;
                 if (!login_resp.token.empty()) cached_token_ = login_resp.token;
                 Logger::log("[BOT #", id_, "] HTTP Login sukses.");
             } else {
                 Logger::log("[BOT #", id_, "] HTTP Login peringatan: ", login_resp.error);
+                if (!cached_server_ip_.empty() && cached_server_port_ > 0) {
+                    Logger::log("[BOT #", id_, "] 🔄 Menggunakan cache server GTPS: ", cached_server_ip_, ":", cached_server_port_);
+                    game_host = cached_server_ip_;
+                    game_port = cached_server_port_;
+                }
             }
         } catch (const std::exception& e) {
             Logger::log("[BOT #", id_, "] HTTP Login exception: ", e.what());
+            if (!cached_server_ip_.empty() && cached_server_port_ > 0) {
+                Logger::log("[BOT #", id_, "] 🔄 Menggunakan cache server GTPS: ", cached_server_ip_, ":", cached_server_port_);
+                game_host = cached_server_ip_;
+                game_port = cached_server_port_;
+            }
         }
     }
 
@@ -150,12 +166,29 @@ void BotInstance::doReconnect() {
             HttpClient http_retry(login_url, use_https);
             auto retry_login = http_retry.login(account_name_, password_, version, platform);
             if (retry_login.success) {
-                if (!retry_login.server_ip.empty()) game_host = retry_login.server_ip;
-                if (retry_login.server_port > 0) game_port = retry_login.server_port;
+                if (!retry_login.server_ip.empty()) {
+                    game_host = retry_login.server_ip;
+                    cached_server_ip_ = retry_login.server_ip;
+                }
+                if (retry_login.server_port > 0) {
+                    game_port = retry_login.server_port;
+                    cached_server_port_ = retry_login.server_port;
+                }
                 if (!retry_login.meta.empty()) cached_meta_ = retry_login.meta;
                 if (!retry_login.token.empty()) cached_token_ = retry_login.token;
+            } else {
+                if (!cached_server_ip_.empty() && cached_server_port_ > 0) {
+                    Logger::log("[BOT #", id_, "] 🔄 HTTP server_data timeout, memakai cache server: ", cached_server_ip_, ":", cached_server_port_);
+                    game_host = cached_server_ip_;
+                    game_port = cached_server_port_;
+                }
             }
-        } catch (...) {}
+        } catch (...) {
+            if (!cached_server_ip_.empty() && cached_server_port_ > 0) {
+                game_host = cached_server_ip_;
+                game_port = cached_server_port_;
+            }
+        }
     }
 
     current_handshake_ = buildHandshake(cached_meta_);
