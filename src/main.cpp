@@ -287,7 +287,18 @@ int main(int argc, char** argv) {
                      pkt.type == GtPacket::NET_MESSAGE_GENERIC_TEXT) {
                 std::string text((const char*)pkt.payload.data(), pkt.payload.size());
                 while (!text.empty() && text.back() == '\0') text.pop_back();
-                Logger::log("  💬 Server Text: ", text);
+
+                if (text.find("action|play_sfx") == std::string::npos &&
+                    text.find("action|ping") == std::string::npos &&
+                    text.find("add_label") == std::string::npos &&
+                    text.find("add_button") == std::string::npos &&
+                    text.find("add_spacer") == std::string::npos) {
+                    std::string clean = Logger::stripColorCodes(text);
+                    while (!clean.empty() && (clean.back() == '\r' || clean.back() == '\n' || clean.back() == ' ')) clean.pop_back();
+                    if (!clean.empty() && clean.size() < 120) {
+                        Logger::log("  💬 Server: ", clean);
+                    }
+                }
 
                 if (text.find("Entering game") != std::string::npos ||
                     text.find("Logon authenticated") != std::string::npos) {
@@ -295,7 +306,6 @@ int main(int argc, char** argv) {
                 }
                 if (text.find("action|ping") != std::string::npos || text.find("ping\n") == 0) {
                     enet.sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT, "action|pong\n");
-                    Logger::log("[ENet] 🏓 Server text ping dijawab dengan action|pong!");
                 }
             }
             else if (pkt.type == GtPacket::NET_MESSAGE_GAME_PACKET) {
@@ -474,7 +484,7 @@ int main(int argc, char** argv) {
                             }).detach();
                         }
                         else {
-                            Logger::log("  ⚡ Variant Function: ", fn);
+                            Logger::logDebug("  ⚡ Variant Function: ", fn);
                         }
                     }
                 }
@@ -499,7 +509,7 @@ int main(int argc, char** argv) {
                         actions.sendTankPacket(ping_reply);
                     }
 
-                    Logger::log("[ENet] 🏓 PING_REQUEST (type=", (int)tank_type, ") dijawab dengan PING_REPLY!");
+                    Logger::logDebug("[ENet] 🏓 PING_REQUEST (type=", (int)tank_type, ") dijawab dengan PING_REPLY!");
                 }
                 // Tank packet 20: PACKET_SET_CHARACTER_STATE (State/Clothing update)
                 else if (tank_type == PACKET_SET_CHARACTER_STATE && pkt.payload.size() >= sizeof(GameUpdatePacket)) {
@@ -510,7 +520,7 @@ int main(int argc, char** argv) {
                     // Packet icon state dari server (bukan error)
                 }
                 else {
-                    Logger::log("[ENet] 📦 Tank Packet tidak tertangani: type=", (int)tank_type, " len=", pkt.payload.size());
+                    Logger::logDebug("[ENet] 📦 Tank Packet tidak tertangani: type=", (int)tank_type, " len=", pkt.payload.size());
                 }
             }
             else if (pkt.type == GtPacket::NET_MESSAGE_ERROR) {
@@ -595,12 +605,10 @@ int main(int argc, char** argv) {
             cli.stop();
         }
 
-        bot_manager.saveAccountsToFile("cache/accounts.txt");
         bot_manager.stopAll();
 
         lua_engine.stopScript();
         autofarm.stop();
-        Logger::log("[*] Menutup bot dan disconnect dari server.");
         enet.disconnect();
 
     } catch (const std::exception& e) {

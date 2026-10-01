@@ -158,8 +158,8 @@ void EnetClient::poll() {
 
                     to_dispatch.push_back(GtPacketData{type, std::move(payload), false});
 
-                    Logger::log("[ENet] S->C type=", type,
-                                " len=", to_dispatch.back().payload.size());
+                    Logger::logDebug("[ENet] S->C type=", type,
+                                    " len=", to_dispatch.back().payload.size());
                     if (Logger::hexdump) {
                         std::vector<uint8_t> full(
                             ev.packet->data,

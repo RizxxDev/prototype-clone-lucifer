@@ -660,7 +660,7 @@ void LuciferGui::renderSidebar(float width, float height) {
     }
     ImGui::SameLine();
     if (ImGui::Button("Save", ImVec2(btn_w, 22.0f))) {
-        if (bot_manager_) bot_manager_->saveAccountsToFile(accounts_file_path_);
+        if (bot_manager_) bot_manager_->saveAccountsToFile(accounts_file_path_, true);
     }
 
     // Add Bot button
@@ -1394,7 +1394,7 @@ void LuciferGui::renderTabMultiBot() {
     }
     ImGui::SameLine();
     if (ImGui::Button("💾 Export Akun", ImVec2(120, 26))) {
-        bot_manager_->saveAccountsToFile(accounts_file_path_);
+        bot_manager_->saveAccountsToFile(accounts_file_path_, true);
     }
     ImGui::EndChild();
 
@@ -1508,7 +1508,7 @@ void LuciferGui::renderTabMultiBot() {
             sel_bot->setPassword(edit_pass);
             sel_bot->setTargetWorld(edit_world);
             bot_manager_->saveAccountsToFile(accounts_file_path_);
-            Logger::log("[MANAGER] ✅ Kredensial bot '", sel_bot->getAccountName(), "' diperbarui & disimpan ke ", accounts_file_path_);
+            Logger::log("[MANAGER] ✅ Kredensial bot '", sel_bot->getAccountName(), "' disimpan.");
         }
 
         ImGui::Spacing();

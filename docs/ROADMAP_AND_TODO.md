@@ -102,6 +102,23 @@ Di bawah ini adalah kumpulan masalah non-sepele dalam reverse-engineering dan pe
   3. Tambahkan fitur *Auto-Recovery*: jika daftar bot di memori kosong saat startup, program otomatis memindai `cache/fingerprints/*.json` untuk memulihkan akun (`<GrowID>`) yang pernah dibuat sebelumnya.
   4. Sediakan editor kredensial interaktif di GUI (`SelectedBotDetail`) agar pengguna dapat memperbarui dan menyimpan password serta target world langsung ke `cache/accounts.txt`.
 
+### 10. Sanitasi Output Terminal & Reduksi Kebisingan Log (*Clean Console UX*)
+- **Masalah**: Terminal dibanjiri teks berulang dan format yang rusak:
+  1. Paket ENet masuk `[ENet] S->C type=4 len=...` dicetak puluhan kali per detik.
+  2. Variant function umum seperti `⚡ Variant Function: OnNameChanged` dan `OnSetPos` dicetak setiap detik.
+  3. Server generic text seperti efek suara internal (`action|play_sfx`), ping/pong, dan markup form dialog raksasa (`add_label_with_icon...`) di-dump mentah-mentah ke stdout hingga memotong teks baris lain.
+  4. Log status henti bot `🛑 Bot dihentikan.` dan penyimpanan file dicetak berulang kali (3-4 kali) saat shutdown.
+- **Penyebab**:
+  - Logger di level network (`enet_client.cpp`) dan packet dispatcher mencetak semua event tanpa filter level kepentingan.
+  - Kode warna bawaan Growtopia (`` `2 `w `b `5 ``) tidak dibersihkan sehingga merusak baris terminal.
+  - Siklus shutdown memanggil `stop()` di `gui.shutdown()`, `main()`, `~BotManager()`, dan `~BotInstance()`.
+- **Solusi**:
+  1. Tambahkan `Logger::logDebug` dan setel default `Logger::verbose = false`. Pindahkan log paket raw ENet (`S->C`), ping/pong, dan variant minor ke `logDebug`.
+  2. Implementasikan fungsi `Logger::stripColorCodes(std::string)` untuk membersihkan kode format warna Growtopia agar teks yang dicetak di terminal bersih dan rapi.
+  3. Saring paket teks server: abaikan audio SFX (`action|play_sfx`) dan definisi form dialog raksasa (`add_label`).
+  4. Tambahkan proteksi transisi state pada `BotInstance::stop()` dan `BotManager::stopAll()`: bot yang sudah offline/nonaktif tidak akan mencetak log berulang kali saat destructors berjalan.
+  5. Buat penyimpanan akun di background/shutdown berjalan secara tenang (*quiet save*), dan hanya menampilkan log konfirmasi saat pengguna menekan tombol *Save* atau *Export* secara manual.
+
 ---
 
 ## 🛠️ Panduan Debugging & Troubleshooting

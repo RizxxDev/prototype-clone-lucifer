@@ -52,6 +52,33 @@ public:
         history.push_back(line);
     }
 
+    template<typename... Args>
+    static void logDebug(Args&&... args) {
+        if (!verbose) return;
+        log(std::forward<Args>(args)...);
+    }
+
+    static std::string stripColorCodes(const std::string& input) {
+        std::string res;
+        res.reserve(input.size());
+        for (size_t i = 0; i < input.size(); ++i) {
+            if (input[i] == '`' && i + 1 < input.size()) {
+                char next = input[i + 1];
+                if (next == '`') {
+                    res += '`';
+                    i++;
+                } else {
+                    i++;
+                }
+            } else if (input[i] == '\r') {
+                // Lewati carriage return
+            } else {
+                res += input[i];
+            }
+        }
+        return res;
+    }
+
     static void hexdumpBytes(const std::string& tag,
                              const std::vector<uint8_t>& data) {
         if (!hexdump) return;
@@ -78,7 +105,7 @@ public:
 };
 
 // Inline definitions
-inline bool Logger::verbose = true;
+inline bool Logger::verbose = false;
 inline bool Logger::hexdump = false;
 inline std::mutex Logger::mtx;
 inline std::vector<std::string> Logger::history;

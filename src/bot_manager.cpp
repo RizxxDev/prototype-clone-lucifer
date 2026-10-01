@@ -81,11 +81,21 @@ void BotManager::startAll(int stagger_delay_ms) {
 }
 
 void BotManager::stopAll() {
-    std::lock_guard<std::mutex> lock(mtx_);
-    for (auto& bot : bots_) {
-        bot->stop();
+    std::vector<std::shared_ptr<BotInstance>> bots_copy;
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        bots_copy = bots_;
     }
-    Logger::log("[MANAGER] 🛑 Semua bot dihentikan.");
+    bool any_active = false;
+    for (auto& bot : bots_copy) {
+        if (bot->isActive() || bot->isOnline()) {
+            bot->stop();
+            any_active = true;
+        }
+    }
+    if (any_active) {
+        Logger::log("[MANAGER] 🛑 Semua bot dihentikan.");
+    }
 }
 
 void BotManager::warpAll(const std::string& world_name) {
@@ -192,7 +202,7 @@ bool BotManager::loadAccountsFromFile(const std::string& filepath) {
     return loaded_count > 0;
 }
 
-bool BotManager::saveAccountsToFile(const std::string& filepath) {
+bool BotManager::saveAccountsToFile(const std::string& filepath, bool verbose_log) {
     std::lock_guard<std::mutex> lock(mtx_);
     try {
         std::filesystem::path p(filepath);
@@ -215,7 +225,7 @@ bool BotManager::saveAccountsToFile(const std::string& filepath) {
                 }
             }
             if (has_existing) {
-                Logger::log("[MANAGER] ℹ️ File akun ", filepath, " tidak ditimpa karena pool bot di memory kosong.");
+                Logger::logDebug("[MANAGER] ℹ️ File akun ", filepath, " tidak ditimpa karena pool bot di memory kosong.");
                 return true;
             }
         }
@@ -236,7 +246,11 @@ bool BotManager::saveAccountsToFile(const std::string& filepath) {
         file << "\n";
     }
 
-    Logger::log("[MANAGER] 💾 Daftar akun (", bots_.size(), " bot) disimpan ke: ", filepath);
+    if (verbose_log) {
+        Logger::log("[MANAGER] 💾 Daftar akun (", bots_.size(), " bot) disimpan ke: ", filepath);
+    } else {
+        Logger::logDebug("[MANAGER] 💾 Daftar akun (", bots_.size(), " bot) disimpan ke: ", filepath);
+    }
     return true;
 }
 

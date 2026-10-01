@@ -106,7 +106,7 @@ LoginResponse HttpClient::post(
         h.emplace("Content-Type", "application/x-www-form-urlencoded");
         for (auto& [k, v] : headers) h.emplace(k, v);
 
-        Logger::log("[HTTP] POST ", scheme, host, path);
+        Logger::logDebug("[HTTP] POST ", scheme, host, path);
 
         auto res = cli.Post(path.c_str(), h, body,
                             "application/x-www-form-urlencoded");
@@ -120,8 +120,8 @@ LoginResponse HttpClient::post(
         resp.http_status = res->status;
         resp.body = res->body;
 
-        Logger::log("[HTTP] Status: ", res->status,
-                    " | Body: ", res->body.substr(0, 200));
+        Logger::logDebug("[HTTP] Status: ", res->status,
+                         " | Body: ", res->body.substr(0, 200));
 
         if (res->status >= 200 && res->status < 300) {
             resp.success = true;
@@ -206,17 +206,12 @@ LoginResponse HttpClient::login(
         }
 
         if (!resp.server_ip.empty()) {
-            Logger::log("[LOGIN] Server Data GTPS berhasil dibaca:");
-            Logger::log("        Server IP : ", resp.server_ip);
-            Logger::log("        Port      : ", resp.server_port);
-            if (!resp.meta.empty()) {
-                Logger::log("        Meta      : ", resp.meta);
-            }
+            Logger::log("[LOGIN] Server Data: ", resp.server_ip, ":", resp.server_port, (!resp.meta.empty() ? (" | " + resp.meta) : ""));
         }
 
         // 1b. Jika server menyediakan loginurl (seperti login.creativeps.eu), validasi akun via Web API untuk mendapatkan ltoken
         if (!resp.loginurl.empty() && resp.token.empty()) {
-            Logger::log("[LOGIN] Melakukan web login via: ", resp.loginurl);
+            Logger::log("[LOGIN] Web Validate via: ", resp.loginurl);
             std::string dash_host = resp.loginurl;
             auto ppos = dash_host.find("://");
             if (ppos != std::string::npos) dash_host = dash_host.substr(ppos + 3);

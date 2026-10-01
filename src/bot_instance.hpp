@@ -50,6 +50,7 @@ public:
     void setTargetWorld(const std::string& tw) { target_world_ = tw; }
     std::string getStatusString() const;
     bool isOnline() const { return in_world_.load(); }
+    bool isActive() const { return active_.load(); }
     bool isConnected() const;
     int getPing() const;
 

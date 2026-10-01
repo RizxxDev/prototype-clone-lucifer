@@ -138,17 +138,22 @@ bool BotInstance::start() {
 }
 
 void BotInstance::stop() {
-    active_ = false;
-    in_world_ = false;
+    bool was_active = active_.exchange(false);
+    bool was_in_world = in_world_.exchange(false);
     if (autofarm_) autofarm_->stop();
     if (lua_engine_) lua_engine_->stopScript();
     if (enet_) enet_->disconnect();
 
+    bool was_offline = false;
     {
         std::lock_guard<std::mutex> lock(status_mtx_);
+        was_offline = (status_string_ == "Offline");
         status_string_ = "Offline";
     }
-    Logger::log("[BOT #", id_, " | ", account_name_, "] 🛑 Bot dihentikan.");
+
+    if (was_active || was_in_world || !was_offline) {
+        Logger::log("[BOT #", id_, " | ", account_name_, "] 🛑 Bot dihentikan.");
+    }
 }
 
 void BotInstance::doReconnect() {
@@ -282,7 +287,18 @@ void BotInstance::setupPacketHandlers() {
             std::string text((const char*)pkt.payload.data(), pkt.payload.size());
             while (!text.empty() && text.back() == '\0') text.pop_back();
 
-            Logger::log("[BOT #", id_, "] 💬 Server Text: ", text);
+            // Saring agar sound effects, pings, dan dialog form tidak membanjiri terminal
+            if (text.find("action|play_sfx") == std::string::npos &&
+                text.find("action|ping") == std::string::npos &&
+                text.find("add_label") == std::string::npos &&
+                text.find("add_button") == std::string::npos &&
+                text.find("add_spacer") == std::string::npos) {
+                std::string clean = Logger::stripColorCodes(text);
+                while (!clean.empty() && (clean.back() == '\r' || clean.back() == '\n' || clean.back() == ' ')) clean.pop_back();
+                if (!clean.empty() && clean.size() < 120) {
+                    Logger::log("[BOT #", id_, "] 💬 ", clean);
+                }
+            }
 
             if (text.find("Entering game") != std::string::npos ||
                 text.find("Logon authenticated") != std::string::npos) {
@@ -290,7 +306,6 @@ void BotInstance::setupPacketHandlers() {
             }
             if (text.find("action|ping") != std::string::npos || text.find("ping\n") == 0) {
                 enet_->sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT, "action|pong\n");
-                Logger::log("[BOT #", id_, "] 🏓 Pong dikirim ke server");
             }
         }
         else if (pkt.type == GtPacket::NET_MESSAGE_ERROR) {
@@ -357,7 +372,7 @@ void BotInstance::setupPacketHandlers() {
                     }
 
                     std::string fn = vars[0].str_val;
-                    Logger::log("[BOT #", id_, "] ⚡ Variant Function: ", fn);
+                    Logger::logDebug("[BOT #", id_, "] ⚡ Variant Function: ", fn);
 
                     auto get_vint = [](const Variant& v) -> int {
                         if (v.type == 9) return v.int_val;
@@ -366,7 +381,7 @@ void BotInstance::setupPacketHandlers() {
                     };
 
                     if (fn.find("OnSuperMainStartAcceptLogon") != std::string::npos) {
-                        Logger::log("[BOT #", id_, "] 🌟 OnSuperMainStartAcceptLogon diterima! Mengirim action|enter_game...");
+                        Logger::log("[BOT #", id_, "] 🌟 Logon diterima server. Mengirim action|enter_game...");
                         trigger_enter();
                     }
                     else if (fn.find("SetHasGrowID") != std::string::npos ||
@@ -379,17 +394,21 @@ void BotInstance::setupPacketHandlers() {
                         if (!target_world_.empty()) {
                             warp_to_target();
                         } else {
-                            Logger::log("[BOT #", id_, "] 💡 Target world belum disetel. Gunakan input 'Warp' untuk masuk world.");
+                            Logger::log("[BOT #", id_, "] 💡 Bot di Lobby. Gunakan input 'Warp' untuk masuk world.");
                         }
                     }
                     else if (fn.find("OnConsoleMessage") != std::string::npos) {
                         if (vars.size() > 1) {
-                            Logger::log("[BOT #", id_, "] 💬 Console: ", vars[1].str_val);
+                            std::string clean = Logger::stripColorCodes(vars[1].str_val);
+                            while (!clean.empty() && (clean.back() == '\r' || clean.back() == '\n' || clean.back() == ' ')) clean.pop_back();
+                            if (!clean.empty()) {
+                                Logger::log("[BOT #", id_, "] 💬 ", clean);
+                            }
                         }
                     }
                     else if (fn.find("OnDialogRequest") != std::string::npos) {
                         if (vars.size() > 1) {
-                            Logger::log("[BOT #", id_, "] 📋 Dialog Request:\n", vars[1].str_val);
+                            Logger::logDebug("[BOT #", id_, "] 📋 Dialog Request:\n", vars[1].str_val);
                         }
                     }
                     else if (fn.find("OnSpawn") != std::string::npos) {
@@ -409,7 +428,7 @@ void BotInstance::setupPacketHandlers() {
                         world_->parseRemove(remove_data);
                     }
                     else if (fn.find("OnFailedToEnterWorld") != std::string::npos) {
-                        Logger::log("[BOT #", id_, "] ⚠️ Gagal masuk world (rate limited / world full / invalid). Retry 2s...");
+                        Logger::log("[BOT #", id_, "] ⚠️ Gagal masuk world (mencoba ulang dalam 2s)...");
                         std::thread([this, warp_to_target]() {
                             std::this_thread::sleep_for(std::chrono::milliseconds(2000));
                             if (!in_world_.load()) {
@@ -425,12 +444,7 @@ void BotInstance::setupPacketHandlers() {
                         std::string ipDoor = vars.size() > 4 ? vars[4].str_val : "";
                         int lmode = vars.size() > 5 ? get_vint(vars[5]) : 1;
 
-                        Logger::log("[BOT #", id_, "] 🔁 OnSendToServer diterima!");
-                        Logger::log("         Port   : ", sub_port);
-                        Logger::log("         Token  : ", token);
-                        Logger::log("         UserID : ", userId);
-                        Logger::log("         IPDoor : ", ipDoor);
-                        Logger::log("         LMode  : ", lmode);
+                        Logger::log("[BOT #", id_, "] 🔁 Redirect sub-server: Port ", sub_port, " (Token: ", token, ")");
 
                         std::string sub_host = game_host;
                         std::string door_id = "0";

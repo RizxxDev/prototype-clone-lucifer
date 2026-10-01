@@ -34,7 +34,7 @@ public:
 
     // Import / Export Profil Akun
     bool loadAccountsFromFile(const std::string& filepath);
-    bool saveAccountsToFile(const std::string& filepath);
+    bool saveAccountsToFile(const std::string& filepath, bool verbose_log = false);
 
     // Getters & Statistik
     size_t getBotCount() const;

@@ -116,7 +116,7 @@ DeviceFingerprint DeviceFingerprint::getOrCreateForAccount(const std::string& ac
     std::string file_path = cache_dir + "/" + safe_name + ".json";
     DeviceFingerprint fp;
     if (fp.loadFromFile(file_path)) {
-        Logger::log("[FINGERPRINT] 🛡️ Memuat profil fingerprint tersimpan untuk akun '", account_name, "'");
+        Logger::logDebug("[FINGERPRINT] 🛡️ Memuat profil fingerprint tersimpan untuk akun '", account_name, "'");
         return fp;
     }
 
