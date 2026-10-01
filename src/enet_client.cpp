@@ -122,6 +122,10 @@ bool EnetClient::sendText(uint32_t type, const std::string& text) {
 void EnetClient::poll() {
     std::vector<GtPacketData> to_dispatch;
     PacketCallback cb_copy;
+    EventCallback connect_cb_copy;
+    EventCallback disconnect_cb_copy;
+    bool triggered_connect = false;
+    bool triggered_disconnect = false;
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -132,12 +136,14 @@ void EnetClient::poll() {
             switch (ev.type) {
             case ENET_EVENT_TYPE_CONNECT:
                 connected_ = true;
+                triggered_connect = true;
                 Logger::log("[ENet] Connected event");
                 break;
 
             case ENET_EVENT_TYPE_DISCONNECT:
                 connected_ = false;
                 peer_ = nullptr;
+                triggered_disconnect = true;
                 Logger::log("[ENet] Disconnect event (",
                             ev.peer ? "peer" : "null", ")");
                 break;
@@ -169,6 +175,15 @@ void EnetClient::poll() {
             }
         }
         cb_copy = callback_;
+        connect_cb_copy = connect_callback_;
+        disconnect_cb_copy = disconnect_callback_;
+    }
+
+    if (triggered_connect && connect_cb_copy) {
+        connect_cb_copy();
+    }
+    if (triggered_disconnect && disconnect_cb_copy) {
+        disconnect_cb_copy();
     }
 
     // Dispatch callbacks outside of lock

@@ -12,6 +12,7 @@
 #include <vector>
 #include <atomic>
 #include <memory>
+#include <functional>
 
 class EnetClient;
 class WorldState;
@@ -19,6 +20,9 @@ class BotActions;
 class AutoFarmController;
 class LuaEngine;
 struct BotInfo;
+struct DeviceFingerprint;
+class ReconnectController;
+class BotManager;
 
 // ============================================================
 // Lucifer Native Desktop GUI (Dear ImGui + DirectX 11 + Win32)
@@ -28,7 +32,9 @@ class LuciferGui {
 public:
     LuciferGui(EnetClient& enet, WorldState& world, BotActions& actions,
                AutoFarmController& autofarm, LuaEngine& lua_engine,
-               BotInfo& info, std::atomic<bool>& running);
+               BotInfo& info, std::atomic<bool>& running,
+               DeviceFingerprint& fingerprint, ReconnectController& reconnect_ctrl,
+               std::function<void()> reconnect_fn = nullptr);
     ~LuciferGui();
 
     // Inisialisasi window Win32 & DirectX 11 device
@@ -40,12 +46,17 @@ public:
     // Cleanup resources
     void shutdown();
 
+    // Bot Manager Setter
+    void setBotManager(BotManager* mgr) { bot_manager_ = mgr; }
+
 private:
     void renderTabs();
     void renderTabStatus();
+    void renderTabMultiBot();
     void renderTabMovement();
     void renderTabInventory();
     void renderTabWorld();
+    void renderTabAntiDetection();
     void renderTabScriptEditor();
     void renderTabConsole();
     void renderTabSettings();
@@ -74,6 +85,10 @@ private:
     LuaEngine& lua_engine_;
     BotInfo& info_;
     std::atomic<bool>& running_;
+    DeviceFingerprint& fingerprint_;
+    ReconnectController& reconnect_ctrl_;
+    std::function<void()> reconnect_fn_;
+    BotManager* bot_manager_ = nullptr;
 
     // Movement (Tanda Panah) Buffers
     int move_step_ = 1; // 1 tile per click/keypress
@@ -85,6 +100,27 @@ private:
 
     // Inventory Buffers
     char inv_filter_[64] = "";
+
+    // Multi-Bot Buffers
+    char new_bot_user_[64] = "";
+    char new_bot_pass_[64] = "";
+    char new_bot_world_[64] = "";
+    bool new_bot_use_proxy_ = false;
+    char new_bot_proxy_host_[128] = "";
+    int new_bot_proxy_port_ = 1080;
+    char new_bot_proxy_user_[64] = "";
+    char new_bot_proxy_pass_[64] = "";
+    char multibot_warp_world_[64] = "";
+    char multibot_say_text_[256] = "";
+    int selected_bot_id_ = 1;
+    char accounts_file_path_[256] = "accounts.txt";
+
+    // Proxy Test Buffers
+    char proxy_test_host_[128] = "127.0.0.1";
+    int proxy_test_port_ = 1080;
+    char proxy_test_user_[64] = "";
+    char proxy_test_pass_[64] = "";
+    char proxy_test_result_[256] = "";
 
     // Script Editor Buffers
     char script_buffer_[16384]{};

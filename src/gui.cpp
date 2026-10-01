@@ -6,6 +6,10 @@
 #include "logger.hpp"
 #include "env.hpp"
 #include "lua_engine.hpp"
+#include "anti_detection.hpp"
+#include "reconnect_controller.hpp"
+#include "socks5.hpp"
+#include "bot_manager.hpp"
 
 #include "imgui.h"
 #include "imgui_impl_win32.h"
@@ -47,9 +51,12 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 LuciferGui::LuciferGui(EnetClient& enet, WorldState& world, BotActions& actions,
                        AutoFarmController& autofarm, LuaEngine& lua_engine,
-                       BotInfo& info, std::atomic<bool>& running)
+                       BotInfo& info, std::atomic<bool>& running,
+                       DeviceFingerprint& fingerprint, ReconnectController& reconnect_ctrl,
+                       std::function<void()> reconnect_fn)
     : enet_(enet), world_(world), actions_(actions),
-      autofarm_(autofarm), lua_engine_(lua_engine), info_(info), running_(running) {
+      autofarm_(autofarm), lua_engine_(lua_engine), info_(info), running_(running),
+      fingerprint_(fingerprint), reconnect_ctrl_(reconnect_ctrl), reconnect_fn_(reconnect_fn) {
     g_current_gui = this;
 
     strncpy_s(cfg_account_name_, info_.account_name.c_str(), sizeof(cfg_account_name_) - 1);
@@ -271,6 +278,14 @@ void LuciferGui::run() {
 
         enet_.poll();
 
+        if (reconnect_fn_) {
+            reconnect_ctrl_.update(reconnect_fn_);
+        }
+
+        if (bot_manager_) {
+            bot_manager_->pollAll();
+        }
+
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
@@ -310,9 +325,18 @@ void LuciferGui::renderTabs() {
         ImGui::SameLine();
         ImGui::TextDisabled("— Growtopia Private Server Bot Suite");
 
-        ImGui::SameLine(ImGui::GetWindowWidth() - 250);
+        ImGui::SameLine(ImGui::GetWindowWidth() - 320);
         if (enet_.isConnected()) {
             ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.3f, 1.0f), "● ONLINE");
+            ImGui::SameLine();
+            ImGui::TextDisabled("| %s", info_.account_name.c_str());
+        } else if (reconnect_ctrl_.getState() == ReconnectState::WaitingReconnect) {
+            ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.2f, 1.0f), "● RETRY in %ds (#%d)",
+                               reconnect_ctrl_.getSecondsRemaining(), reconnect_ctrl_.getRetryCount());
+            ImGui::SameLine();
+            ImGui::TextDisabled("| %s", info_.account_name.c_str());
+        } else if (reconnect_ctrl_.getState() == ReconnectState::Reconnecting) {
+            ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "● CONNECTING...");
             ImGui::SameLine();
             ImGui::TextDisabled("| %s", info_.account_name.c_str());
         } else {
@@ -329,6 +353,10 @@ void LuciferGui::renderTabs() {
                 renderTabStatus();
                 ImGui::EndTabItem();
             }
+            if (ImGui::BeginTabItem("🤖 Multi-Bot Manager")) {
+                renderTabMultiBot();
+                ImGui::EndTabItem();
+            }
             if (ImGui::BeginTabItem("🚶 Gerak (Movement)")) {
                 renderTabMovement();
                 ImGui::EndTabItem();
@@ -339,6 +367,10 @@ void LuciferGui::renderTabs() {
             }
             if (ImGui::BeginTabItem("🌍 World & Pemain")) {
                 renderTabWorld();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("🛡️ Anti-Detection & Reconnect")) {
+                renderTabAntiDetection();
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("📜 Script Editor (Lua)")) {
@@ -418,6 +450,230 @@ void LuciferGui::renderTabStatus() {
     }
 
     ImGui::EndChild();
+}
+
+void LuciferGui::renderTabMultiBot() {
+    if (!bot_manager_) {
+        ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "⚠️ Multi-Bot Manager belum terpasang.");
+        return;
+    }
+
+    // 1. Header Bar: Statistik & Tindakan Massal
+    ImGui::BeginChild("MultiBotHeaderCard", ImVec2(0, 115), true);
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "🤖 MULTI-BOT THREAD POOL ORCHESTRATOR");
+    ImGui::SameLine();
+    ImGui::TextDisabled("| Total: %zu Bot | Online: %zu | Threads: %zu Workers",
+                       bot_manager_->getBotCount(), bot_manager_->getOnlineCount(),
+                       bot_manager_->getThreadPool().getThreadCount());
+
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    if (ImGui::Button("▶️ Start All (Staggered)", ImVec2(180, 28))) {
+        bot_manager_->startAll(1500);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("🛑 Stop All", ImVec2(120, 28))) {
+        bot_manager_->stopAll();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("🧹 Bersihkan Pool", ImVec2(140, 28))) {
+        bot_manager_->clearBots();
+    }
+
+    ImGui::Spacing();
+    ImGui::SetNextItemWidth(160);
+    ImGui::InputTextWithHint("##mbwarp", "World...", multibot_warp_world_, sizeof(multibot_warp_world_));
+    ImGui::SameLine();
+    if (ImGui::Button("🚀 Warp Semua Bot", ImVec2(150, 0))) {
+        if (strlen(multibot_warp_world_) > 0) {
+            bot_manager_->warpAll(multibot_warp_world_);
+        }
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(200);
+    ImGui::InputTextWithHint("##mbsay", "Ketik chat massal...", multibot_say_text_, sizeof(multibot_say_text_));
+    ImGui::SameLine();
+    if (ImGui::Button("💬 Say Semua Bot", ImVec2(150, 0))) {
+        if (strlen(multibot_say_text_) > 0) {
+            bot_manager_->sayAll(multibot_say_text_);
+        }
+    }
+    ImGui::EndChild();
+
+    ImGui::Spacing();
+
+    // 2. Konten Utama: 2 Kolom (Kiri: Form Tambah & Import | Kanan: Tabel Bot)
+    ImGui::Columns(2, "MultiBotCols", false);
+    ImGui::SetColumnWidth(0, 360.0f);
+
+    // Form Tambah Bot
+    ImGui::BeginChild("AddBotCard", ImVec2(0, 340), true);
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "➕ TAMBAH BOT BARU");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::SetNextItemWidth(180);
+    ImGui::InputText("GrowID / User", new_bot_user_, sizeof(new_bot_user_));
+    ImGui::SetNextItemWidth(180);
+    ImGui::InputText("Password", new_bot_pass_, sizeof(new_bot_pass_), ImGuiInputTextFlags_Password);
+    ImGui::SetNextItemWidth(180);
+    ImGui::InputText("Target World", new_bot_world_, sizeof(new_bot_world_));
+
+    ImGui::Spacing();
+    ImGui::Checkbox("Gunakan Proxy SOCKS5", &new_bot_use_proxy_);
+    if (new_bot_use_proxy_) {
+        ImGui::SetNextItemWidth(160);
+        ImGui::InputText("Proxy Host", new_bot_proxy_host_, sizeof(new_bot_proxy_host_));
+        ImGui::SetNextItemWidth(90);
+        ImGui::InputInt("Proxy Port", &new_bot_proxy_port_);
+        ImGui::SetNextItemWidth(140);
+        ImGui::InputText("Proxy User", new_bot_proxy_user_, sizeof(new_bot_proxy_user_));
+        ImGui::SetNextItemWidth(140);
+        ImGui::InputText("Proxy Pass", new_bot_proxy_pass_, sizeof(new_bot_proxy_pass_), ImGuiInputTextFlags_Password);
+    }
+
+    ImGui::Spacing();
+    if (ImGui::Button("➕ Tambahkan ke Pool", ImVec2(220, 30))) {
+        if (strlen(new_bot_user_) > 0) {
+            Socks5Config pcfg;
+            if (new_bot_use_proxy_) {
+                pcfg.enabled = true;
+                pcfg.host = new_bot_proxy_host_;
+                pcfg.port = new_bot_proxy_port_;
+                pcfg.username = new_bot_proxy_user_;
+                pcfg.password = new_bot_proxy_pass_;
+            }
+            bot_manager_->addBot(new_bot_user_, new_bot_pass_, new_bot_world_, pcfg);
+            new_bot_user_[0] = '\0';
+            new_bot_pass_[0] = '\0';
+        }
+    }
+    ImGui::EndChild();
+
+    ImGui::Spacing();
+
+    // Import / Export Card
+    ImGui::BeginChild("ImportExportCard", ImVec2(0, 140), true);
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "📁 IMPORT / EXPORT AKUN");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::SetNextItemWidth(220);
+    ImGui::InputText("File", accounts_file_path_, sizeof(accounts_file_path_));
+    ImGui::Spacing();
+    if (ImGui::Button("📥 Import Akun", ImVec2(120, 26))) {
+        bot_manager_->loadAccountsFromFile(accounts_file_path_);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("💾 Export Akun", ImVec2(120, 26))) {
+        bot_manager_->saveAccountsToFile(accounts_file_path_);
+    }
+    ImGui::EndChild();
+
+    ImGui::NextColumn();
+
+    // Tabel Kanan: Daftar Bot
+    ImGui::BeginChild("BotListCard", ImVec2(0, 340), true);
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "📋 DAFTAR BOT DI THREAD POOL");
+    ImGui::Separator();
+
+    auto bots = bot_manager_->getBots();
+    if (ImGui::BeginTable("MultiBotTable", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+        ImGui::TableSetupColumn("GrowID", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+        ImGui::TableSetupColumn("Target World", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Proxy SOCKS5", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+        ImGui::TableSetupColumn("Tindakan", ImGuiTableColumnFlags_WidthFixed, 180.0f);
+        ImGui::TableHeadersRow();
+
+        for (const auto& b : bots) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::Text("#%d", b->getId());
+
+            ImGui::TableSetColumnIndex(1);
+            if (b->getId() == selected_bot_id_) {
+                ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.30f, 1.0f), "👉 %s", b->getAccountName().c_str());
+            } else {
+                ImGui::Text("%s", b->getAccountName().c_str());
+            }
+
+            ImGui::TableSetColumnIndex(2);
+            ImGui::Text("%s", b->getTargetWorld().empty() ? "-" : b->getTargetWorld().c_str());
+
+            ImGui::TableSetColumnIndex(3);
+            std::string st = b->getStatusString();
+            if (b->isOnline()) {
+                ImGui::TextColored(ImVec4(0.25f, 0.95f, 0.35f, 1.0f), "● %s", st.c_str());
+            } else if (st.find("Retry") != std::string::npos || st.find("Connecting") != std::string::npos) {
+                ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.25f, 1.0f), "⏳ %s", st.c_str());
+            } else {
+                ImGui::TextColored(ImVec4(0.70f, 0.70f, 0.70f, 1.0f), "○ %s", st.c_str());
+            }
+
+            ImGui::TableSetColumnIndex(4);
+            ImGui::Text("%s", b->getProxy().enabled ? b->getProxy().toString().c_str() : "Direct");
+
+            ImGui::TableSetColumnIndex(5);
+            std::string start_lbl = "Start##" + std::to_string(b->getId());
+            std::string stop_lbl = "Stop##" + std::to_string(b->getId());
+            std::string sel_lbl = "Pilih##" + std::to_string(b->getId());
+            std::string del_lbl = "X##" + std::to_string(b->getId());
+
+            if (ImGui::SmallButton(start_lbl.c_str())) {
+                b->start();
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton(stop_lbl.c_str())) {
+                b->stop();
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton(sel_lbl.c_str())) {
+                selected_bot_id_ = b->getId();
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton(del_lbl.c_str())) {
+                bot_manager_->removeBot(b->getId());
+            }
+        }
+        ImGui::EndTable();
+    }
+    ImGui::EndChild();
+
+    // Card Bawah: Detail Bot Terpilih
+    auto sel_bot = bot_manager_->getBotById(selected_bot_id_);
+    if (sel_bot) {
+        ImGui::Spacing();
+        ImGui::BeginChild("SelectedBotDetail", ImVec2(0, 140), true);
+        ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.30f, 1.0f), "🔎 DETAIL BOT TERPILIH: #%d (%s)",
+                           sel_bot->getId(), sel_bot->getAccountName().c_str());
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::Text("Status: %s | Ping: %d ms | Target World: %s",
+                    sel_bot->getStatusString().c_str(), sel_bot->getPing(), sel_bot->getTargetWorld().c_str());
+        ImGui::Text("Fingerprint MAC: %s | RID: %s... | Country: %s",
+                    sel_bot->getFingerprint().mac.c_str(), sel_bot->getFingerprint().rid.substr(0, 8).c_str(),
+                    sel_bot->getFingerprint().country.c_str());
+
+        ImGui::Spacing();
+        if (ImGui::Button("🚀 Warp Bot Ini", ImVec2(130, 24))) {
+            if (!sel_bot->getTargetWorld().empty()) sel_bot->warp(sel_bot->getTargetWorld());
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("🧲 Collect Sekitar", ImVec2(130, 24))) {
+            sel_bot->collectNearby(4.0f);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("🔄 Respawn Bot Ini", ImVec2(130, 24))) {
+            sel_bot->respawn();
+        }
+        ImGui::EndChild();
+    }
+
+    ImGui::Columns(1);
 }
 
 void LuciferGui::renderTabMovement() {
@@ -616,6 +872,153 @@ void LuciferGui::renderTabWorld() {
         ImGui::EndTable();
     }
     ImGui::EndChild();
+    ImGui::Columns(1);
+}
+
+void LuciferGui::renderTabAntiDetection() {
+    ImGui::Columns(2, "AntiDetCols", false);
+    ImGui::SetColumnWidth(0, 520.0f);
+
+    // Card 1: Device Fingerprint
+    ImGui::BeginChild("FingerprintCard", ImVec2(0, 360), true);
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "🛡️ DEVICE FINGERPRINT (IDENTITAS HARDWARE)");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::Text("MAC Address   : %s", fingerprint_.mac.c_str());
+    ImGui::Text("RID (UUID)    : %s", fingerprint_.rid.c_str());
+    ImGui::Text("WK (Token)    : %s", fingerprint_.wk.c_str());
+    ImGui::Text("Hash          : %d", fingerprint_.hash);
+    ImGui::Text("Hash2         : %d", fingerprint_.hash2);
+    ImGui::Text("fhash         : %d", fingerprint_.fhash);
+    ImGui::Text("fz / zf       : %d / %d", fingerprint_.fz, fingerprint_.zf);
+    ImGui::Text("Country Code  : %s", fingerprint_.country.c_str());
+    ImGui::Text("Device Version: %d", fingerprint_.device_version);
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    if (ImGui::Button("🎲 Acak Ulang Fingerprint (Regenerate)", ImVec2(300, 32))) {
+        fingerprint_ = DeviceFingerprint::generateRandom(fingerprint_.country);
+        fingerprint_.saveToFile(".fingerprints/" + info_.account_name + ".json");
+        Logger::log("[FINGERPRINT] 🎲 Fingerprint diacak ulang untuk akun ", info_.account_name);
+        Logger::log("              MAC: ", fingerprint_.mac, " | RID: ", fingerprint_.rid.substr(0, 8), "...");
+    }
+    ImGui::TextDisabled("Catatan: Fingerprint baru akan otomatis tersimpan di .fingerprints/");
+
+    ImGui::EndChild();
+
+    ImGui::Spacing();
+
+    // Card 2: Delay Randomization
+    ImGui::BeginChild("DelayJitterCard", ImVec2(0, 180), true);
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "⏱️ DELAY & RANDOMIZATION (HUMAN JITTER)");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::Checkbox("Aktifkan Random Jitter pada Delay Tindakan", &AntiDetection::enable_random_delays);
+    ImGui::TextDisabled("Memberikan variasi acak (±15-25%%) pada jeda gerak, pukul, dan autofarm.");
+
+    ImGui::Spacing();
+    ImGui::Checkbox("Aktifkan Simulasi Jeda Manusia (Micro-Pauses)", &AntiDetection::enable_human_pauses);
+    ImGui::TextDisabled("Menambahkan jeda sesaat secara acak (150-350ms) seperti interaksi pemain manusia asli.");
+
+    ImGui::EndChild();
+
+    ImGui::Spacing();
+
+    // Card 4: SOCKS5 Proxy Tester
+    ImGui::BeginChild("Socks5TesterCard", ImVec2(0, 240), true);
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "🌐 SOCKS5 PROXY TESTER (RFC 1928 / 1929)");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::SetNextItemWidth(180);
+    ImGui::InputText("Host Proxy", proxy_test_host_, sizeof(proxy_test_host_));
+    ImGui::SetNextItemWidth(90);
+    ImGui::InputInt("Port Proxy", &proxy_test_port_);
+    ImGui::SetNextItemWidth(140);
+    ImGui::InputText("User (Opsional)", proxy_test_user_, sizeof(proxy_test_user_));
+    ImGui::SetNextItemWidth(140);
+    ImGui::InputText("Pass (Opsional)", proxy_test_pass_, sizeof(proxy_test_pass_), ImGuiInputTextFlags_Password);
+
+    ImGui::Spacing();
+    if (ImGui::Button("🔍 Uji Konektivitas Proxy SOCKS5", ImVec2(240, 28))) {
+        Socks5Config tcfg;
+        tcfg.enabled = true;
+        tcfg.host = proxy_test_host_;
+        tcfg.port = proxy_test_port_;
+        tcfg.username = proxy_test_user_;
+        tcfg.password = proxy_test_pass_;
+        std::string res;
+        Socks5Client::testProxy(tcfg, res);
+        strncpy_s(proxy_test_result_, res.c_str(), sizeof(proxy_test_result_) - 1);
+    }
+
+    if (strlen(proxy_test_result_) > 0) {
+        ImGui::Spacing();
+        if (strstr(proxy_test_result_, "✅") != nullptr) {
+            ImGui::TextColored(ImVec4(0.25f, 0.95f, 0.35f, 1.0f), "%s", proxy_test_result_);
+        } else {
+            ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "%s", proxy_test_result_);
+        }
+    }
+    ImGui::EndChild();
+
+    ImGui::NextColumn();
+
+    // Card 3: Auto-Reconnect with Exponential Backoff
+    ImGui::BeginChild("ReconnectCard", ImVec2(0, 800), true);
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "🔄 AUTO-RECONNECT (EXPONENTIAL BACKOFF)");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    bool rec_enabled = reconnect_ctrl_.isEnabled();
+    if (ImGui::Checkbox("Aktifkan Fitur Auto-Reconnect", &rec_enabled)) {
+        reconnect_ctrl_.setEnabled(rec_enabled);
+    }
+
+    ImGui::Spacing();
+    ImGui::Text("Status Reconnect : %s", reconnect_ctrl_.getStateString().c_str());
+    ImGui::Text("Percobaan Gagal  : %d kali", reconnect_ctrl_.getRetryCount());
+    ImGui::Text("Interval Delay   : %.1f detik", reconnect_ctrl_.getNextDelayMs() / 1000.0f);
+
+    if (reconnect_ctrl_.getState() == ReconnectState::WaitingReconnect) {
+        int sec_rem = reconnect_ctrl_.getSecondsRemaining();
+        int total_sec = std::max(1, reconnect_ctrl_.getNextDelayMs() / 1000);
+        float progress = 1.0f - (static_cast<float>(sec_rem) / static_cast<float>(total_sec));
+        ImGui::Spacing();
+        ImGui::ProgressBar(progress, ImVec2(-1, 24),
+                           (std::to_string(sec_rem) + " detik tersisa...").c_str());
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    if (ImGui::Button("⚡ Reconnect Sekarang", ImVec2(180, 32))) {
+        if (reconnect_fn_) {
+            reconnect_ctrl_.triggerNow(reconnect_fn_);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("🛑 Batalkan Countdown", ImVec2(180, 32))) {
+        reconnect_ctrl_.cancel();
+    }
+
+    ImGui::Spacing();
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.30f, 1.0f), "💡 Cara Kerja Exponential Backoff:");
+    ImGui::BulletText("Percobaan 1: ~2 detik");
+    ImGui::BulletText("Percobaan 2: ~4 detik (+-15%% jitter)");
+    ImGui::BulletText("Percobaan 3: ~8 detik (+-15%% jitter)");
+    ImGui::BulletText("Percobaan 4: ~16 detik (+-15%% jitter)");
+    ImGui::BulletText("Maksimal    : 30 detik (menghindari spam server)");
+    ImGui::BulletText("Counter otomatis reset ke 0 saat berhasil online di world!");
+
+    ImGui::EndChild();
+
     ImGui::Columns(1);
 }
 

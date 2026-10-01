@@ -38,10 +38,24 @@ public:
     // Poll events sekali (non-blocking, timeout 10ms)
     void poll();
 
+    using EventCallback = std::function<void()>;
+
     // Set callback untuk paket masuk
     void onPacket(PacketCallback cb) {
         std::lock_guard<std::mutex> lock(mutex_);
         callback_ = cb;
+    }
+
+    // Set callback saat terhubung
+    void onConnect(EventCallback cb) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        connect_callback_ = cb;
+    }
+
+    // Set callback saat terputus
+    void onDisconnect(EventCallback cb) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        disconnect_callback_ = cb;
     }
 
     bool isConnected() const { return connected_; }
@@ -58,6 +72,8 @@ private:
     ENetPeer* peer_ = nullptr;
     std::atomic<bool> connected_{false};
     PacketCallback callback_;
+    EventCallback connect_callback_;
+    EventCallback disconnect_callback_;
     std::string server_host_;
     int server_port_ = 0;
     mutable std::mutex mutex_;

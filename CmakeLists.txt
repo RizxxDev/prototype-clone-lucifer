@@ -84,6 +84,11 @@ add_executable(gtps_bot
     src/bot_actions.cpp
     src/gui.cpp
     src/lua_engine.cpp
+    src/anti_detection.cpp
+    src/reconnect_controller.cpp
+    src/socks5.cpp
+    src/bot_instance.cpp
+    src/bot_manager.cpp
 )
 
 target_include_directories(gtps_bot PRIVATE

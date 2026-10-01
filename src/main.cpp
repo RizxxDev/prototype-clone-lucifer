@@ -18,6 +18,11 @@
 #include "env.hpp"
 #include "gui.hpp"
 #include "lua_engine.hpp"
+#include "anti_detection.hpp"
+#include "reconnect_controller.hpp"
+#include "socks5.hpp"
+#include "bot_manager.hpp"
+#include <filesystem>
 
 using json = nlohmann::json;
 
@@ -148,42 +153,88 @@ int main(int argc, char** argv) {
         AutoFarmController autofarm(actions, world);
         LuaEngine lua_engine(actions, world, enet);
 
-        std::string handshake;
-        if (!acc_name.empty() && !acc_pass.empty()) {
-            handshake += "tankIDName|" + acc_name + "\n";
-            handshake += "tankIDPass|" + acc_pass + "\n";
-            handshake += "f|1\n";
-        } else {
-            handshake += "f|0\n";
-        }
-        handshake += "requestedName|" + (acc_name.empty() ? "GuestBot" : acc_name) + "\n";
-        handshake += "protocol|" + std::to_string(protocol) + "\n";
-        handshake += "game_version|" + version + "\n";
-        handshake += "cbits|128\n";
-        handshake += "player_age|20\n";
-        handshake += "GDPR|1\n";
-        handshake += "hash2|-129482910\n";
-        if (!login_resp.meta.empty()) {
-            handshake += "meta|" + login_resp.meta + "\n";
-        }
-        handshake += "fhash|-716928004\n";
-        handshake += "platformID|0\n";
-        handshake += "deviceVersion|0\n";
-        handshake += "country|id\n";
-        handshake += "hash|-16777216\n";
-        handshake += "mac|38:7a:0e:b9:32:87\n";
-        handshake += "rid|02350719000D94880AAD1618027D798B\n";
-        handshake += "wk|7F9E8284754593C0E51D4B5391629856\n";
-        handshake += "fz|1331849031\n";
-        handshake += "zf|-1331849031\n";
+        // Anti-Detection & Device Fingerprint
+        AntiDetection::init();
+        DeviceFingerprint fingerprint = DeviceFingerprint::getOrCreateForAccount(acc_name);
+        ReconnectController reconnect_ctrl(2000, 2.0f, 30000, 0.15f);
 
-        std::string handshake_login = handshake;
-        std::string current_handshake = handshake_login;
+        auto build_handshake = [&](const std::string& meta_str, int user_id = 0, int token = 0, const std::string& door_id = "", int lmode = -1) -> std::string {
+            std::string hs;
+            if (!acc_name.empty() && !acc_pass.empty()) {
+                hs += "tankIDName|" + acc_name + "\n";
+                hs += "tankIDPass|" + acc_pass + "\n";
+                hs += "f|1\n";
+            } else {
+                hs += "f|0\n";
+            }
+            hs += "requestedName|" + (acc_name.empty() ? "GuestBot" : acc_name) + "\n";
+            hs += "protocol|" + std::to_string(protocol) + "\n";
+            hs += "game_version|" + version + "\n";
+            hs += "cbits|128\n";
+            hs += "player_age|20\n";
+            hs += "GDPR|1\n";
+            hs += fingerprint.toHandshakeString(meta_str);
+            if (user_id > 0) {
+                hs += "user|" + std::to_string(user_id) + "\n";
+            }
+            if (token > 0) {
+                hs += "token|" + std::to_string(token) + "\n";
+            }
+            if (!door_id.empty()) {
+                hs += "doorID|" + door_id + "\n";
+            }
+            if (lmode >= 0) {
+                hs += "lmode|" + std::to_string(lmode) + "\n";
+            }
+            return hs;
+        };
+
+        std::string current_handshake = build_handshake(login_resp.meta);
         std::atomic<bool> handshake_sent{false};
         std::atomic<bool> auto_warped{false};
         std::atomic<bool> warped_to_target{false};
         std::atomic<bool> redirecting{false};
         std::atomic<bool> in_world{false};
+
+        std::function<void()> do_reconnect = [&]() {
+            if (redirecting.load()) return;
+            Logger::log("[*] 🔄 Menjalankan proses Auto-Reconnect...");
+            enet.disconnect();
+            world.clearWorld();
+            in_world = false;
+            handshake_sent = false;
+            auto_warped = false;
+            warped_to_target = false;
+
+            if (!login_url.empty() && login_url.find("growtopia") != std::string::npos) {
+                try {
+                    HttpClient http_retry(login_url, use_https);
+                    auto retry_login = http_retry.login(acc_name, acc_pass, version, platform);
+                    if (retry_login.success) {
+                        if (!retry_login.server_ip.empty()) game_host = retry_login.server_ip;
+                        if (retry_login.server_port > 0) game_port = retry_login.server_port;
+                        if (!retry_login.meta.empty()) login_resp.meta = retry_login.meta;
+                        Logger::log("[RECONNECT] 🌐 HTTP login session diperbarui");
+                    }
+                } catch (...) {}
+            }
+
+            current_handshake = build_handshake(login_resp.meta);
+
+            if (enet.connect(game_host, game_port, 5000)) {
+                Logger::log("[RECONNECT] ✅ ENet terhubung ke ", game_host, ":", game_port);
+            } else {
+                Logger::log("[RECONNECT] ❌ Gagal connect ENet ke ", game_host, ":", game_port);
+                reconnect_ctrl.onDisconnected("Gagal terhubung ke host server");
+            }
+        };
+
+        enet.onDisconnect([&]() {
+            if (!redirecting.load()) {
+                in_world = false;
+                reconnect_ctrl.onDisconnected("Koneksi ENet terputus dari server");
+            }
+        });
 
         auto warp_to_target_world = [&]() {
             if (!target_world.empty() && !in_world.load() && !warped_to_target.exchange(true)) {
@@ -250,6 +301,7 @@ int main(int argc, char** argv) {
                 // Tank packet 4: PACKET_SEND_MAP_DATA (World Map)
                 else if (tank_type == PACKET_SEND_MAP_DATA) {
                     in_world = true;
+                    reconnect_ctrl.onConnected();
                     if (pkt.payload.size() > sizeof(GameUpdatePacket)) {
                         world.parseMapData(pkt.payload.data() + sizeof(GameUpdatePacket),
                                            pkt.payload.size() - sizeof(GameUpdatePacket));
@@ -311,6 +363,7 @@ int main(int argc, char** argv) {
                         }
                         else if (fn.find("OnSpawn") != std::string::npos) {
                             in_world = true;
+                            reconnect_ctrl.onConnected();
                             std::string spawn_data = vars.size() > 1 ? vars[1].str_val : "";
                             world.parseSpawn(spawn_data, acc_name);
                             Logger::log("[+] 👤 OnSpawn diterima! Karakter terdaftar di world.");
@@ -381,35 +434,8 @@ int main(int argc, char** argv) {
                                 sub_host = ipDoor;
                             }
 
-                            // Buat handshake untuk sub-server
-                            std::string sub_handshake;
-                            sub_handshake += "tankIDName|" + acc_name + "\n";
-                            sub_handshake += "tankIDPass|" + acc_pass + "\n";
-                            sub_handshake += "requestedName|" + acc_name + "\n";
-                            sub_handshake += "f|1\n";
-                            sub_handshake += "protocol|" + std::to_string(protocol) + "\n";
-                            sub_handshake += "game_version|" + version + "\n";
-                            sub_handshake += "cbits|128\n";
-                            sub_handshake += "player_age|20\n";
-                            sub_handshake += "GDPR|1\n";
-                            sub_handshake += "hash2|-129482910\n";
-                            if (!login_resp.meta.empty()) {
-                                sub_handshake += "meta|" + login_resp.meta + "\n";
-                            }
-                            sub_handshake += "fhash|-716928004\n";
-                            sub_handshake += "platformID|0\n";
-                            sub_handshake += "deviceVersion|0\n";
-                            sub_handshake += "country|id\n";
-                            sub_handshake += "hash|-16777216\n";
-                            sub_handshake += "mac|38:7a:0e:b9:32:87\n";
-                            sub_handshake += "rid|02350719000D94880AAD1618027D798B\n";
-                            sub_handshake += "wk|7F9E8284754593C0E51D4B5391629856\n";
-                            sub_handshake += "fz|1331849031\n";
-                            sub_handshake += "zf|-1331849031\n";
-                            sub_handshake += "user|" + std::to_string(userId) + "\n";
-                            sub_handshake += "token|" + std::to_string(token) + "\n";
-                            sub_handshake += "doorID|" + door_id + "\n";
-                            sub_handshake += "lmode|" + std::to_string(lmode) + "\n";
+                            // Buat handshake untuk sub-server menggunakan fingerprint yang sama
+                            std::string sub_handshake = build_handshake(login_resp.meta, userId, token, door_id, lmode);
 
                             // Hubungkan ke subserver pada background thread
                             std::thread([&enet, &world, sub_host, sub_port, sub_handshake, &current_handshake, &handshake_sent, &auto_warped, &warped_to_target, &in_world, &redirecting]() {
@@ -483,30 +509,56 @@ int main(int argc, char** argv) {
         if (!enet.connect(game_host, game_port, 5000)) {
             Logger::log("[!] Gagal connect ENet ke ", game_host, ":", game_port);
             Logger::log("    Cek: server GTPS ENet jalan? port benar? firewall?");
-            return 1;
+            Logger::log("    Auto-reconnect akan mencoba menyambung ulang...");
+            reconnect_ctrl.onDisconnected("Gagal koneksi awal ENet");
         }
 
         BotInfo info{acc_name, version, platform, game_host, game_port};
-        LuciferGui gui(enet, world, actions, autofarm, lua_engine, info, g_running);
+        LuciferGui gui(enet, world, actions, autofarm, lua_engine, info, g_running,
+                       fingerprint, reconnect_ctrl, do_reconnect);
+
+        // Inisialisasi Multi-Bot Manager & Thread Pool
+        BotManager bot_manager(4);
+        bot_manager.default_login_url = login_url;
+        bot_manager.default_use_https = use_https;
+        bot_manager.default_game_host = game_host;
+        bot_manager.default_game_port = game_port;
+        bot_manager.default_version = version;
+        bot_manager.default_platform = platform;
+        bot_manager.default_protocol = protocol;
+
+        // Daftarkan akun utama ke manager
+        bot_manager.addBot(acc_name, acc_pass, target_world);
+
+        // Muat akun tambahan dari accounts.txt jika tersedia
+        if (std::filesystem::exists("accounts.txt")) {
+            bot_manager.loadAccountsFromFile("accounts.txt");
+        }
+
+        gui.setBotManager(&bot_manager);
 
         Logger::log("\n========================================================");
         Logger::log("  🔥 Membuka Antarmuka GUI Lucifer (Dear ImGui DX11)...");
         Logger::log("========================================================\n");
 
         if (gui.init(::GetModuleHandle(nullptr), 1080, 720)) {
-            // Jalankan GUI Lucifer (Main render loop + ENet polling)
+            // Jalankan GUI Lucifer (Main render loop + ENet polling + Auto-reconnect update)
             gui.run();
             gui.shutdown();
         } else {
             Logger::log("[!] Gagal membuka jendela GUI DirectX 11, fallback ke CLI...");
             Cli cli(enet, g_running, info, world, actions, autofarm);
             cli.start();
-            while (g_running && (enet.isConnected() || redirecting)) {
+            while (g_running) {
                 enet.poll();
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                reconnect_ctrl.update(do_reconnect);
+                bot_manager.pollAll();
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
             }
             cli.stop();
         }
+
+        bot_manager.stopAll();
 
         lua_engine.stopScript();
         autofarm.stop();

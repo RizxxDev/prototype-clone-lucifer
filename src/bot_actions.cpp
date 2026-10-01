@@ -4,6 +4,7 @@
 #include "enet_client.hpp"
 #include "packet.hpp"
 #include "logger.hpp"
+#include "anti_detection.hpp"
 #include <cmath>
 #include <chrono>
 
@@ -59,7 +60,8 @@ void BotActions::moveTo(int tile_x, int tile_y, int step_delay_ms) {
                 world_.setLocalPos(step_x, step_y);
 
                 if (step_delay_ms > 0 && i < steps) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(step_delay_ms));
+                    AntiDetection::sleepWithJitter(step_delay_ms, std::max(2, step_delay_ms / 4));
+                    AntiDetection::maybeHumanPause(0.015f, 60, 150);
                 }
             }
             Logger::log("[ACTION] 🚶 Selesai bergerak ke tile (", tile_x, ", ", tile_y, ") [Pixel: ", target_x, ", ", target_y, "]");
@@ -244,19 +246,20 @@ void AutoFarmController::farmLoop(uint16_t item_id, int tile_x, int tile_y, int 
 
         // 1. Pasang blok
         actions_.place(item_id, tile_x, tile_y);
-        std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+        AntiDetection::sleepWithJitter(delay_ms, std::max(5, (int)(delay_ms * 0.15f)));
         if (!running_) break;
 
         // 2. Pukul blok sampai hancur
         for (int h = 0; h < hits_per_block && running_; ++h) {
             actions_.hit(tile_x, tile_y);
-            std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+            AntiDetection::sleepWithJitter(delay_ms, std::max(5, (int)(delay_ms * 0.15f)));
         }
         if (!running_) break;
 
         // 3. Ambil drop hasil panen
         actions_.collectNearby(3.0f);
-        std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+        AntiDetection::sleepWithJitter(delay_ms, std::max(5, (int)(delay_ms * 0.15f)));
+        AntiDetection::maybeHumanPause(0.03f, 150, 350);
 
         loop_count++;
         if (loop_count % 10 == 0) {

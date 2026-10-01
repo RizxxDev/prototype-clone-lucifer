@@ -1,6 +1,8 @@
 # Environment & sensitive credentials
 .env
 cookies.txt
+accounts.txt
+.fingerprints/
 
 # CMake & build outputs
 build/

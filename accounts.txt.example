@@ -1,0 +1,14 @@
+# Lucifer Multi-Bot Accounts Template
+# Format: GrowID:Password:TargetWorld:ProxyHost:ProxyPort:ProxyUser:ProxyPass
+# Jika tidak menggunakan proxy: GrowID:Password:TargetWorld
+# Jika tanpa target world: GrowID:Password
+
+# Contoh bot tanpa proxy:
+BotFarmer1:Password123:FARMSEED
+BotFarmer2:Password123:FARMSEED
+
+# Contoh bot dengan proxy SOCKS5 (tanpa auth):
+# BotProxy1:Password123:STORE:127.0.0.1:1080
+
+# Contoh bot dengan proxy SOCKS5 (dengan username & password auth):
+# BotProxy2:Password123:STORE:192.168.1.50:1080:myuser:mypassword

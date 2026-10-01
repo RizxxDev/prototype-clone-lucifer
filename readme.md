@@ -28,12 +28,15 @@ Target jangka panjang project ini adalah membangun bot GTPS yang memiliki kemamp
 | **1** | CLI, HTTP login, ENet connect, kirim/terima paket, auto-warp | ✅ Terverifikasi pada GTPS nyata (CreativePS) |
 | **2** | Parser paket: world tiles, inventory, player tracking, dropped objects | ✅ Selesai (TankPacket 56b & WorldState) |
 | **3** | Action: `move`, `punch`, `place`, `wrench`, `collect`, `drop`, `trash`, `farm` | ✅ Selesai (BotActions & AutoFarm) |
-| **4** | Scripting Lua + API bergaya Lucifer Lua v2.86 | ✅ Selesai (Lua 5.4 + API Lucifer v2.86 & GUI Editor) |
-| **5** | Multi-bot, auto-reconnect, proxy | ⏳ Tahap Berikutnya |
+| **4** | Scripting Lua + API bergaya Lucifer Lua v2.86 & Bothax API | ✅ Selesai (Lua 5.4 + Bothax & Lucifer API + In-Game GUI Editor) |
+| **5** | Multi-bot (`ThreadPool`), auto-reconnect (Exponential Backoff), proxy SOCKS5, Anti-Detection (Hardware Profile & Delay Jitter) | ✅ Selesai |
 | **6** | GUI menggunakan Dear ImGui + DirectX 11 (Native Desktop Window) | ✅ Selesai (Lucifer Desktop Suite) |
 
+> 📚 **Basis Pengetahuan & Dokumentasi Lengkap Proyek**:
+> Seluruh arsitektur mendalam, protokol paket ENet/TankPacket, referensi API Lua Bothax/Lucifer, sistem anti-deteksi, hingga petunjuk teknis dapat dibaca di folder [**`docs/`**](file:///c:/Users/RIZIQ/Documents/testtt/docs/README.md).
+
 > **Status build:** ✅ Terverifikasi & berhasil dibuild di Windows (`build/Release/gtps_bot.exe`).
-> **Status Fase 1:** ✅ Berhasil terhubung ke GTPS, melewati web validation & Discord auto-auth, dan auto-warp ke world tujuan.
+> **Status Fase 1 - 6:** ✅ Berhasil terhubung ke GTPS, melewati web validation & Discord auto-auth, auto-warp ke world tujuan, multi-bot manager, dan GUI ImGui DirectX 11 aktif.
 
 ---
 
@@ -411,20 +414,20 @@ Saat ini beberapa bagian Fase 1 masih perlu verifikasi:
 
 ### Fase 5 — Advanced
 
-- [ ] Multi-bot dengan thread pool
-- [ ] Proxy SOCKS5
-- [ ] Auto-reconnect dengan exponential backoff
-- [ ] Auto-warp
-- [ ] Auto-farm
-- [ ] Auto-collect
-- [ ] Mekanisme anti-detection seperti delay/randomization dan device fingerprint
+- [x] Multi-bot dengan thread pool
+- [x] Proxy SOCKS5
+- [x] Auto-reconnect dengan exponential backoff
+- [x] Auto-warp
+- [x] Auto-farm
+- [x] Auto-collect
+- [x] Mekanisme anti-detection seperti delay/randomization dan device fingerprint
 
 ### Fase 6 — GUI
 
-- [ ] ImGui native atau web UI
-- [ ] Bot manager — start/stop per bot
-- [ ] Log viewer
-- [ ] Script editor
+- [x] ImGui native atau web UI
+- [x] Bot manager — start/stop per bot
+- [x] Log viewer
+- [x] Script editor
 
 ---
 
