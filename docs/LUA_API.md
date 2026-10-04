@@ -152,8 +152,14 @@ Dialek alternatif bergaya objek `bot:` untuk kemudahan otomasi:
 | `bot:warp(world_name)` | Berpindah / masuk ke nama world target. |
 | `bot:say(text)` | Mengirimkan pesan chat publik. |
 | `bot:respawn()` | Mengirimkan permintaan respawn ke server. |
+| `bot:setProxy(proxy_str)` | Mengatur proxy SOCKS5 (`host:port:user:pass`, `host:port`, atau `""` untuk Direct). |
+| `bot:getProxy()` | Mengembalikan string konfigurasi proxy aktif saat ini. |
+| `bot:testProxy(proxy_str)` | Menguji konektivitas proxy SOCKS5 dan mengembalikan `ok, latency_ms, msg`. |
 | `sleep(ms)` | Menjeda eksekusi skrip selama `ms` milidetik. |
 | `log(text)` | Mencetak pesan ke console log GUI Lucifer. |
+| `setProxy(proxy_str)` | Global alias untuk `bot:setProxy()`. |
+| `getProxy()` | Global alias untuk `bot:getProxy()`. |
+| `testProxy(proxy_str)` | Global alias untuk menguji proxy SOCKS5 (`ok, latency_ms, msg`). |
 
 ---
 
@@ -223,3 +229,25 @@ AddHook("OnVariant", "MuteSpamHook", function(vars, netid, delay)
     return false -- Teruskan paket normal
 end)
 ```
+
+### Contoh 4: Rotasi & Pengujian Proxy SOCKS5 Dinamis
+```lua
+local proxy_list = {
+    "127.0.0.1:1080:user1:pass1",
+    "192.168.1.50:1080",
+    "10.0.0.1:1080:proxyuser:secret"
+}
+
+log("🌐 Menguji daftar proxy SOCKS5...")
+for _, p in ipairs(proxy_list) do
+    local ok, ping_ms, msg = testProxy(p)
+    if ok and ping_ms < 250 then
+        log(string.format("✅ Memilih proxy terbaik: %s (Ping: %.1f ms)", p, ping_ms))
+        bot:setProxy(p)
+        break
+    else
+        log(string.format("⚠️ Proxy lambat/gagal: %s (Info: %s)", p, msg))
+    end
+end
+```
+

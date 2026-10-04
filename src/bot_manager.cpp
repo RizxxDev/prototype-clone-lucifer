@@ -21,7 +21,8 @@ std::shared_ptr<BotInstance> BotManager::addBot(const std::string& name,
                                                 const Socks5Config& proxy) {
     std::lock_guard<std::mutex> lock(mtx_);
     int id = next_bot_id_++;
-    auto bot = std::make_shared<BotInstance>(id, name, pass, target_world, proxy);
+    Socks5Config effective_proxy = proxy.isValid() ? proxy : (proxy.enabled ? proxy : default_proxy);
+    auto bot = std::make_shared<BotInstance>(id, name, pass, target_world, effective_proxy);
 
     bot->login_url = default_login_url;
     bot->use_https = default_use_https;
@@ -32,7 +33,8 @@ std::shared_ptr<BotInstance> BotManager::addBot(const std::string& name,
     bot->protocol = default_protocol;
 
     bots_.push_back(bot);
-    Logger::log("[MANAGER] ➕ Bot ditambahkan: #", id, " (", name, ")");
+    Logger::log("[MANAGER] ➕ Bot ditambahkan: #", id, " (", name, ")",
+                (effective_proxy.isValid() ? (" [Proxy: " + effective_proxy.toString() + "]") : " [Direct]"));
     return bot;
 }
 
@@ -156,7 +158,7 @@ bool BotManager::loadAccountsFromFile(const std::string& filepath) {
         }
         if (line.empty() || line[0] == '#') continue;
 
-        // Format: GrowID[:Password][:TargetWorld][:ProxyHost:ProxyPort[:ProxyUser:ProxyPass]]
+        // Format: GrowID[:Password][:TargetWorld][:ProxyString...]
         std::stringstream ss(line);
         std::vector<std::string> parts;
         std::string part;
@@ -183,14 +185,15 @@ bool BotManager::loadAccountsFromFile(const std::string& filepath) {
             if (already_exists) continue;
 
             Socks5Config proxy;
-            if (parts.size() >= 5) {
-                proxy.host = parts[3];
-                try { proxy.port = std::stoi(parts[4]); } catch (...) {}
-                if (parts.size() >= 7) {
-                    proxy.username = parts[5];
-                    proxy.password = parts[6];
+            if (parts.size() >= 4) {
+                std::string proxy_str;
+                for (size_t i = 3; i < parts.size(); ++i) {
+                    if (i > 3) proxy_str += ":";
+                    proxy_str += parts[i];
                 }
-                proxy.enabled = true;
+                proxy = Socks5Config::parse(proxy_str);
+            } else if (default_proxy.isValid()) {
+                proxy = default_proxy;
             }
 
             addBot(user, pass, world, proxy);
@@ -239,9 +242,11 @@ bool BotManager::saveAccountsToFile(const std::string& filepath, bool verbose_lo
 
     for (const auto& bot : bots_) {
         file << bot->getAccountName() << ":" << bot->getPassword() << ":" << bot->getTargetWorld();
-        if (bot->getProxy().enabled) {
-            file << ":" << bot->getProxy().host << ":" << bot->getProxy().port
-                 << ":" << bot->getProxy().username << ":" << bot->getProxy().password;
+        if (bot->getProxy().enabled && !bot->getProxy().host.empty()) {
+            file << ":" << bot->getProxy().host << ":" << bot->getProxy().port;
+            if (!bot->getProxy().username.empty() || !bot->getProxy().password.empty()) {
+                file << ":" << bot->getProxy().username << ":" << bot->getProxy().password;
+            }
         }
         file << "\n";
     }

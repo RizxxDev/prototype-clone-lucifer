@@ -17,6 +17,7 @@ Dokumen ini merinci status implementasi proyek saat ini, riwayat masalah teknis 
 | **Fase 5.3** | Kontroler Auto-Reconnect Finite State Machine dengan Exponential Backoff & Jitter | ✅ Selesai | [`src/reconnect_controller.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/reconnect_controller.hpp), [`src/reconnect_controller.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/reconnect_controller.cpp) |
 | **Fase 5.4** | Generator Hardware Fingerprint Persisten (`cache/fingerprints/`) & Human Delay Jitter | ✅ Selesai | [`src/anti_detection.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/anti_detection.hpp), [`src/anti_detection.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/anti_detection.cpp) |
 | **Fase 5.5** | Sistem Direktori Terpadu `cache/` (Fingerprints, `accounts.txt`, `items.dat` Parser & Auto-Sync) | ✅ Selesai | [`src/item_database.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/item_database.hpp), [`src/item_database.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/item_database.cpp) |
+| **Fase 5.6** | Pelacakan Live Statistik Akun (Level, Gems, Played, Age) & Sinkronisasi Persisten | ✅ Selesai | [`src/bot_stats.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_stats.hpp), [`src/bot_stats.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_stats.cpp), [`src/gui.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/gui.cpp) |
 
 ---
 
@@ -118,6 +119,28 @@ Di bawah ini adalah kumpulan masalah non-sepele dalam reverse-engineering dan pe
   3. Saring paket teks server: abaikan audio SFX (`action|play_sfx`) dan definisi form dialog raksasa (`add_label`).
   4. Tambahkan proteksi transisi state pada `BotInstance::stop()` dan `BotManager::stopAll()`: bot yang sudah offline/nonaktif tidak akan mencetak log berulang kali saat destructors berjalan.
   5. Buat penyimpanan akun di background/shutdown berjalan secara tenang (*quiet save*), dan hanya menampilkan log konfirmasi saat pengguna menekan tombol *Save* atau *Export* secara manual.
+
+### 11. Deteksi Alamat IP Riil yang Terbaca oleh Server Game (Bukan Sekadar Label "Direct")
+- **Masalah**: Pada tab identitas akun / RID, alamat IP bot sebelumnya hanya menampilkan string statis `"Direct"` atau host proxy secara mentah, tanpa menampilkan IP publik asli yang terdeteksi di internet dan terbaca oleh game server.
+- **Penyebab**: Klien game tidak memiliki listener untuk menangkap IP publik dari pesan server maupun resolver IP publik otomatis untuk koneksi langsung.
+- **Solusi**:
+  1. Implementasikan `HttpClient::fetchPublicIp()` dan `HttpClient::fetchDirectIp()` melalui endpoint terpercaya (`api.ipify.org`, `icanhazip.com`, `ifconfig.me`).
+  2. Lakukan inspeksi paket `OnConsoleMessage` dan pesan selamat datang server untuk mengekstrak alamat IP klien yang dicatat server (`extractIpFromText()`).
+  3. Tampilkan alamat IP dengan status prioritas berjenjang di GUI: (1) Terverifikasi dari respon server game, (2) Terdeteksi via SOCKS5 proxy gateway, (3) Terdeteksi dari IP publik ISP lokal.
+
+### 12. Pelacakan Live & Akumulasi Statistik Akun (Level, Gems, Played, Age)
+- **Masalah**: Nilai Level, Gems, Played Time, dan Account Age di kartu Bot Information sebelumnya bersifat statis atau hardcoded (`Level: 1`, `Played 0.00 hours. Age 0 days.`).
+- **Penyebab**: Protokol Growtopia menyebarkan statistik akun di berbagai jenis paket yang berbeda tergantung implementasi server GTPS (ada yang melalui `OnSetBumperCoinValues`, `OnSetGems`, `OnSetLevel`, inventory item 112, dialog status `/status`, pesan `/me`, atau `OnConsoleMessage`). Selain itu, server sering tidak menyimpan waktu bermain (played hours) dan umur akun (age) di paket cepat.
+- **Solusi**:
+  1. Buat modul arsitektur `BotStats` ([`src/bot_stats.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_stats.hpp), [`src/bot_stats.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_stats.cpp)) yang thread-safe.
+  2. **Multi-Source Parser**: Tangkap nilai Gems & Level dari:
+     - `OnSetBumperCoinValues` (Standar protokol: `var[1]` = gems, `var[2]` = level/bumper).
+     - `OnSetGems` dan `OnSetLevel`.
+     - Paket inventory (`PACKET_SEND_INVENTORY_STATE` untuk item 112).
+     - Parser teks regex & substring case-insensitive dari dialog `/status`, pesan konsol, dan talk bubble `/me`.
+  3. **Continuous Session Time Accumulation**: Hitung durasi bermain aktif bot sejak `OnSpawn` / `PACKET_SEND_MAP_DATA`, akumulasikan ke `total_played_seconds`, dan simpan secara persisten ke `cache/stats/<account_name>.json`.
+  4. **Dynamic Account Age**: Hitung umur akun dalam hari berdasarkan selisih waktu sekarang dengan stempel waktu pembuatan fingerprint / profil akun (`first_seen_epoch`), dengan fallback nilai eksplisit dari respon server.
+  5. Sediakan tombol sinkronisasi manual interaktif `[ 🔄##query_stats ]` di GUI yang mengirim perintah `/status` dan `/me` ke server untuk memperbarui seluruh data secara instan.
 
 ---
 

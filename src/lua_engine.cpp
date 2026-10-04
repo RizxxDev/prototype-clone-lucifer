@@ -5,6 +5,7 @@
 #include "game_packet.hpp"
 #include "packet.hpp"
 #include "logger.hpp"
+#include "bot_stats.hpp"
 
 extern "C" {
 #include <lua.h>
@@ -547,6 +548,14 @@ void LuaEngine::registerBothaxApi(lua_State* L) {
     lua_setglobal(L, "RunDelayed");
     lua_pushcfunction(L, bothaxRunThread);
     lua_setglobal(L, "RunThread");
+
+    // 9. SOCKS5 Proxy
+    lua_pushcfunction(L, luaSetProxy);
+    lua_setglobal(L, "setProxy");
+    lua_pushcfunction(L, luaGetProxy);
+    lua_setglobal(L, "getProxy");
+    lua_pushcfunction(L, luaTestProxy);
+    lua_setglobal(L, "testProxy");
 }
 
 void LuaEngine::registerLuciferApi(lua_State* L) {
@@ -588,6 +597,37 @@ void LuaEngine::registerLuciferApi(lua_State* L) {
     lua_setfield(L, -2, "getPlayers");
     lua_pushcfunction(L, botFindItem);
     lua_setfield(L, -2, "findItem");
+    lua_pushcfunction(L, botGetPlaytime);
+    lua_setfield(L, -2, "getPlaytime");
+    lua_pushcfunction(L, botGetAge);
+    lua_setfield(L, -2, "getAge");
+    lua_pushcfunction(L, botGetActiveTime);
+    lua_setfield(L, -2, "getActiveTime");
+    lua_pushcfunction(L, botGetLevel);
+    lua_setfield(L, -2, "getLevel");
+    lua_pushcfunction(L, botGetGems);
+    lua_setfield(L, -2, "getGems");
+    lua_pushcfunction(L, botWrenchPlayer);
+    lua_setfield(L, -2, "wrenchPlayer");
+    lua_pushcfunction(L, luaSetProxy);
+    lua_setfield(L, -2, "setProxy");
+    lua_pushcfunction(L, luaGetProxy);
+    lua_setfield(L, -2, "getProxy");
+    lua_pushcfunction(L, luaTestProxy);
+    lua_setfield(L, -2, "testProxy");
+
+    // Lucifer bot properties (level, gem_count, status, google_status)
+    int cur_lvl = stats_ ? stats_->level : 1;
+    int cur_gems = stats_ ? stats_->gems : 0;
+    bool is_online = enet_.isConnected();
+    lua_pushinteger(L, cur_lvl);
+    lua_setfield(L, -2, "level");
+    lua_pushinteger(L, cur_gems);
+    lua_setfield(L, -2, "gem_count");
+    lua_pushinteger(L, is_online ? 1 : 0);
+    lua_setfield(L, -2, "status");
+    lua_pushinteger(L, is_online ? 1 : 0);
+    lua_setfield(L, -2, "google_status");
 
     lua_pushvalue(L, -1);
     lua_setglobal(L, "bot");
@@ -1993,3 +2033,145 @@ int LuaEngine::botFindItem(lua_State* L) {
     lua_pushinteger(L, count);
     return 1;
 }
+
+Socks5Config LuaEngine::getProxy() const {
+    if (get_proxy_fn_) return get_proxy_fn_();
+    return local_proxy_;
+}
+
+void LuaEngine::setProxy(const Socks5Config& p) {
+    if (set_proxy_fn_) set_proxy_fn_(p);
+    local_proxy_ = p;
+}
+
+int LuaEngine::luaSetProxy(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
+    LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+    if (!self) return 0;
+
+    int idx = (lua_isuserdata(L, 1) || lua_istable(L, 1)) ? 2 : 1;
+    if (lua_isnoneornil(L, idx)) {
+        Socks5Config empty_cfg{};
+        self->setProxy(empty_cfg);
+        lua_pushboolean(L, true);
+        return 1;
+    }
+
+    const char* str = luaL_checkstring(L, idx);
+    std::string s(str ? str : "");
+    if (s.empty()) {
+        Socks5Config empty_cfg{};
+        self->setProxy(empty_cfg);
+        lua_pushboolean(L, true);
+        return 1;
+    }
+
+    Socks5Config cfg = Socks5Config::parse(s);
+    if (!cfg.isValid()) {
+        lua_pushboolean(L, false);
+        lua_pushstring(L, "Format SOCKS5 tidak valid (contoh: host:port:user:pass atau host:port)");
+        return 2;
+    }
+
+    self->setProxy(cfg);
+    lua_pushboolean(L, true);
+    return 1;
+}
+
+int LuaEngine::luaGetProxy(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
+    LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+    if (!self) {
+        lua_pushstring(L, "");
+        return 1;
+    }
+
+    Socks5Config cfg = self->getProxy();
+    if (!cfg.isValid()) {
+        lua_pushstring(L, "");
+    } else {
+        lua_pushstring(L, cfg.toString().c_str());
+    }
+    return 1;
+}
+
+int LuaEngine::luaTestProxy(lua_State* L) {
+    int idx = (lua_isuserdata(L, 1) || lua_istable(L, 1)) ? 2 : 1;
+    const char* str = luaL_checkstring(L, idx);
+    Socks5Config cfg = Socks5Config::parse(str ? str : "");
+    if (!cfg.isValid()) {
+        lua_pushboolean(L, false);
+        lua_pushnumber(L, -1);
+        lua_pushstring(L, "Format SOCKS5 tidak valid");
+        return 3;
+    }
+
+    float latency = -1.0f;
+    std::string err;
+    bool ok = Socks5Client::testConnection(cfg, latency, err);
+
+    lua_pushboolean(L, ok);
+    lua_pushnumber(L, latency);
+    lua_pushstring(L, err.c_str());
+    return 3;
+}
+
+int LuaEngine::botGetPlaytime(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
+    LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+    int hrs = self && self->stats_ ? static_cast<int>(self->stats_->getEffectivePlayedHours()) : 0;
+    lua_pushinteger(L, hrs);
+    return 1;
+}
+
+int LuaEngine::botGetAge(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
+    LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+    int age = self && self->stats_ ? self->stats_->getEffectiveAgeDays() : 0;
+    lua_pushinteger(L, age);
+    return 1;
+}
+
+int LuaEngine::botGetActiveTime(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
+    LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+    std::string act = self && self->stats_ ? self->stats_->getFormattedActiveTime() : "0.00 hours";
+    lua_pushstring(L, act.c_str());
+    return 1;
+}
+
+int LuaEngine::botGetLevel(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
+    LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+    int lvl = self && self->stats_ ? self->stats_->level : 1;
+    lua_pushinteger(L, lvl);
+    return 1;
+}
+
+int LuaEngine::botGetGems(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
+    LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+    int gems = self && self->stats_ ? self->stats_->gems : 0;
+    lua_pushinteger(L, gems);
+    return 1;
+}
+
+int LuaEngine::botWrenchPlayer(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
+    LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+    if (!self) return 0;
+    int base = lua_isuserdata(L, 1) || lua_istable(L, 1) ? 2 : 1;
+    int net_id = static_cast<int>(luaL_checkinteger(L, base));
+    self->actions_.wrenchPlayer(net_id);
+    return 0;
+}
+
+

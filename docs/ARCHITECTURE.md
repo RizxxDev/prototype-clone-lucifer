@@ -149,9 +149,19 @@ Alur eksekusi aplikasi berjalan melalui tahapan terstruktur:
   - **Aturan Validasi 61-Byte**: Memastikan paket state selalu memiliki trailing byte nol agar panjang paket total minimal 61 byte (`4 header + 56 struct + 1 trailing`), mencegah disconnect dari server GTPS modern.
   - Parser dan generator `VariantList` (data tipe string, float, integer, uint, vector).
 
-### C. Lapisan Aksi & Otomasi (`src/bot_actions.*`, `src/lua_engine.*`)
+### C. Lapisan Aksi & Otomasi (`src/bot_actions.*`, `src/lua_engine.*`, `src/bot_stats.*`)
 - **`BotActions`**:
   - Menyediakan operasi tingkat tinggi: `moveTo(tx, ty)` (dengan interpolasi lintasan multi-step), `hit(tx, ty)`, `place(id, tx, ty)`, `wrench(tx, ty)`, `enter()`, `collectNearby(radius)`, `drop(id, count)`, `trash(id, count)`, `say(text)`, `warp(name)`, `respawn()`.
+  - Tambahan: `wrenchPlayer(net_id)` — mengirim paket `action|wrench` ke player tertentu berdasarkan `net_id` untuk men-trigger dialog profil (`personal_info`).
+- **`BotStats`** (`src/bot_stats.hpp/cpp`):
+  - Struct data terpusat untuk menyimpan statistik akun yang terbaca dari server:
+    - `level` (int), `gems` (int64), `playtime_hours` (int), `age_days` (int), `active_time_hours` (int).
+    - `ip` (string publik), `mac` (string), `rid` (string), `wk` (string), `country` (string).
+  - **Parsing logic**: `parseFromText(text)` menggunakan `std::regex` untuk mengekstrak field dari teks dialog `OnDialogRequest` (tipe `personal_info`) atau output console `/status`/`/stats`.
+    - Regex `Level:\s*(\d+)`, `Gems:\s*([\d,]+)`, `Played\s*:\s*(\d+)\s*Hours`, `Age\s*:\s*(\d+)\s*Days`.
+  - **Helper formatters**: `getFormattedGems()` → `"1,234,567"`, `getFormattedActiveTime()` → `"42h"`.
+  - Thread-safe via `std::mutex mtx`.
+  - Sumber data: `OnDialogRequest` (packet `dialog_return` tipe `personal_info`), dan `OnConsoleMessage` (output `/status` dan pesan spawn/world).
 - **`AutoFarmController`**:
   - Menjalankan rutinitas penanaman/pembongkaran blok pada thread latar belakang terpisah.
   - Dilengkapi verifikasi ketersediaan stok inventaris dan auto-collect hasil drop.
@@ -210,7 +220,7 @@ Alur eksekusi aplikasi berjalan melalui tahapan terstruktur:
       - Input pencarian: `Search for bots..`
       - Tombol aksi: `[ Load ]`, `[ Save ]`, `[ Add Bot ]`, `[ Remove Bot ]`.
     - **Panel Kanan `[ 🤖 Bots ]` (Sub-Tabs)**:
-      - Sub-tabs: `[ Main ]`, `[ Control ]`, `[ World ]`, `[ Inventory ]`, `[ Console ]`, `[ Automation ]`, `[ Rotation ]`, `[ Logs ]`.
+      - Sub-tabs: `[ Main ]`, `[ World ]`, `[ Inventory ]`, `[ Console ]`, `[ Automation ]`, `[ Rotation ]`, `[ Logs ]`, `[ RID ]`.
       - **Sub-Tab `[ Control ]` (PC Keyboard & Gamepad Controller)**:
         - **Left Deck**:
           - Status bot terpilih, koordinat pixel `(pos_x, pos_y)`, tile `(tx, ty)`, status lantai/lompat, arah hadap.
@@ -221,6 +231,11 @@ Alur eksekusi aplikasi berjalan melalui tahapan terstruktur:
           - Radar mini-map 11x9 grid berpusat pada posisi bot saat ini.
           - Menampilkan blok solid (Bedrock, Dirt, Granite, Laser), platform kayu, background, item drop (permata), dan avatar bot `[🤖]`.
           - Interaksi mouse langsung pada grid: Klik Kiri untuk memukul (Hit), Klik Kanan untuk memasang (Place) item terpilih, dan Klik Tengah untuk Wrench.
+      - **Sub-Tab `[ RID ]` (Hardware Identity & Network Inspector)**:
+        - Memvisualisasikan dan mengelola identitas digital bot yang dipilih:
+        - Menampilkan IP aktif yang digunakan (Proxy SOCKS5 IP:Port atau Direct IP lokal), status koneksi proxy, dan server target GTPS.
+        - Menampilkan komponen hardware: MAC Address, RID (UUID), Country code, WK token, Hash, Hash2, fhash, fz/zf, dan Device Version.
+        - Tombol `📋 Copy` pada setiap baris field, tombol `🎲 Acak Ulang Fingerprint` yang langsung memperbarui cache persisten `cache/fingerprints/<GrowID>.json`, tombol `💾 Simpan`, dan tombol `📋 Salin Semua Info Akun`.
       - **Grid 2x2 pada Sub-Tab `[ Main ]`**:
         1. **Card `👤 Bot Information` (Kiri Atas)**:
            - Status Online & Ping ms `[37?]`, Google Idle, Level & Gems, World & Posisi Tile `(X, Y)`, Played & Age.
@@ -279,6 +294,22 @@ Ketika web host mengalami *downtime*, rate limiting, atau packet loss:
 2. **Graceful Fallback**: Jika `server_data.php` sewaktu-waktu timeout (misalnya saat reconnect setelah server reboot), bot otomatis menggunakan data cache game server terakhir daripada jatuh ke host web yang mati.
 3. **Konfigurasi Default .env**: Parameter `GTPS_GAME_SERVER` dan `GTPS_GAME_PORT` diarahkan langsung ke game host aktif (`51.79.162.77:17013`) sebagai jaring pengaman awal.
 
+### Arsitektur Terowongan Proxy SOCKS5 (Dual-Stack TCP & UDP RFC 1928/1929)
+Untuk menjamin privasi IP lokal dan menghindari rate limiting/IP ban saat mengoperasikan multi-bot:
+1. **TCP HTTP Tunneling (`HttpClient`)**:
+   - HTTP login request (`server_data.php`) dialirkan melalui socket TCP yang telah dinegosiasikan dengan SOCKS5 CONNECT (`CMD 0x01`) oleh `Socks5Client::createConnectedSocket`.
+   - Untuk endpoint HTTPS, WinHTTP dikonfigurasikan dengan named proxy `socks=<host>:<port>`.
+2. **UDP ENet Loopback Bridge (`Socks5UdpTunnel`)**:
+   - `libenet` berkomunikasi murni melalui paket datagram UDP tanpa dukungan proxy native.
+   - Solusi: `Socks5UdpTunnel` membuka socket UDP lokal pada `127.0.0.1:<port_ephemeral>` dan memegang satu TCP Control Socket ke proxy server dengan perintah SOCKS5 `UDP ASSOCIATE` (`CMD 0x03`).
+   - Setiap paket keluar dari `ENetClient` lokal dibungkus dengan header RFC 1928 (10 bytes: `0x00 0x00 0x00 0x01 <Target_IP> <Target_Port>`) lalu diteruskan ke Relay Proxy.
+   - Paket balasan dari proxy relay di-decapsulate di background worker thread dan diteruskan kembali ke ENet loopback client tanpa latensi overhead yang terukur ($<0.05\text{ ms}$).
+   - Saat bot dialihkan ke sub-server baru melalui `OnSendToServer`, terowongan otomatis me-restart relay ke IP dan port sub-server tujuan.
+3. **Multi-Bot Orchestration & Quick Paste**:
+   - Setiap `BotInstance` memiliki `Socks5Config` dan instans `Socks5UdpTunnel` sendiri yang sepenuhnya independen.
+   - `BotManager` memiliki `default_proxy` yang diwariskan ke semua bot baru.
+   - GUI menyediakan tab **🌐 Proxy** dengan fitur distribusi batch otomatis (Round-Robin) untuk membagikan daftar puluhan proxy ke bot yang ada.
+
 ---
 
 ## 7. Sistem Direktori Terpadu `cache/` (Storage Architecture)
@@ -289,8 +320,10 @@ Saat aplikasi pertama kali dijalankan, sistem otomatis membuat dan mengelola str
 cache/
 ├── accounts.txt          # Kredensial akun bot dari GUI (GrowID:Pass:World:Proxy)
 ├── items.dat             # Database biner item Growtopia (diunduh dari server / lokal)
-└── fingerprints/         # Profil isolasi hardware identitas perangkat per-akun
-    ├── default.json
+├── fingerprints/         # Profil isolasi hardware identitas perangkat per-akun
+│   ├── default.json
+│   └── <GrowID>.json
+└── stats/                # Statistik live akun (Level, Gems, Played Hours, Age)
     └── <GrowID>.json
 ```
 
@@ -310,6 +343,11 @@ cache/
    - Dikelola oleh modul singleton [`ItemDatabase`](file:///c:/Users/RIZIQ/Documents/testtt/src/item_database.hpp).
    - **Auto-Download**: Ketika server mengirim paket tank tipe 16 (`PACKET_SEND_ITEM_DATABASE_DATA`), byte mentah langsung disimpan ke `cache/items.dat` dan didekripsi menggunakan sandi cipher Growtopia (`PBGHF892FASDLFDND`).
    - Terintegrasi dengan tab GUI `[ 🗄️ Database ]` untuk live searching ribuan item, waktu panen, rarity, dan hit points.
+4. **`cache/stats/`**:
+   - Dikelola oleh modul [`BotStats`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_stats.hpp) untuk menyimpan riwayat statistik bot: `level`, `gems`, `played_hours`, `age_days`, `total_played_seconds`, dan `first_seen_epoch`.
+   - **Otomasi Akumulasi Sesi**: Saat bot terhubung dan online di world (`OnSpawn`), timer sesi diaktifkan. Setiap 15 detik serta saat disconnect/shutdown, akumulasi detik bermain disimpan kembali ke file JSON akun tersebut.
+   - **Pencegahan Reset Umur Akun**: Menggunakan `first_seen_epoch` yang diambil dari stempel waktu pembuatan profil fingerprint akun untuk menghitung umur akun dalam hari secara dinamis.
+   - **Sinkronisasi Instan**: Dilengkapi tombol `[ 🔄##query_stats ]` pada GUI yang mengirim instruksi `/status` dan `/me` ke GTPS server untuk mengupdate nilai terbaru.
 
 ---
 
@@ -492,6 +530,44 @@ graph TD
   - `bot:jump(power)`: Melompat alami dengan busur parabola.
   - `bot:dropDown()`: Turun melewati platform kayu.
   - `bot:moveTo(x, y, [delay])` & `bothaxFindPath`: Otomatis menunggu kedatangan bot (`waitForArrival`) sehingga aksi lanjutan dalam skrip Lua (seperti memukul/memasang) tidak dijalankan secara prematur di luar jangkauan (*anti-reach-hack*).
+
+### 9. Arsitektur Sub-Tab Console Lucifer v2.85 & Engine Render Teks GT
+Sub-tab **Console** pada Lucifer v2.85 dirancang khusus untuk memonitor log real-time in-game bot dan pesan server secara terisolasi per bot instance:
+- **Struktur Pesan & Tag Kategorisasi (`ConsoleEntry` & `ConsoleMsgType`)**:
+  - `[S]` (System): Status koneksi lokal, lookup IP server, pesan enter world, dan pengumuman sistem GTPS.
+  - `[T]` (Task): Pesan tujuan, tutorial, quest, dan achievement server (misal: `[Welcome to Growtopia <1> #0] Lock the World (0/1)`).
+  - `[W]` (World): Obrolan publik in-game dan balon bicara (`OnTalkBubble`).
+  - `[P]` (Private): Bisikan / whisper pribadi dan transmisi khusus (`CP:`, dsb.).
+- **Growtopia Color Code Rendering (`renderColoredGtText`)**:
+  - Parser internal mengenali kode warna backtick Growtopia: `` `0 `` sampai `` `9 ``, `` `w `` (putih), `` `p `` (pink), `` `o `` (oranye), `` `b `` (hitam), `` `q `` (cyan), `` `e `` (biru muda), `` `r `` (hijau muda), `` `t `` (toska), `` `a ``/`` `s `` (abu-abu/perak), dan kode reset warna.
+  - Segmentasi dilakukan tanpa alokasi memori berlebih (`flush_buf`) dan dirender inline menggunakan `ImGui::TextUnformatted` + `ImGui::SameLine(0, 0)` sehingga warna teks dalam satu baris berganti secara dinamis persis seperti client game asli.
+- **Top Bar Controls & Viewport Filter**:
+  - Tiga toggle switch: `Enable`, `Show Timestamps` (`[HH:MM:SS]`), dan `Auto Scroll`.
+  - 4 Tombol Filter Pill: `[ 📋 All ]`, `[ 🌐 World ]`, `[ 💬 Private ]`, `[ ⚙ System ]` dengan highlight neon cyan aktif.
+- **Interaksi Chat & Bottom Bar**:
+  - Input teks interaktif `"Type a message to chat."` yang langsung mengeksekusi `bot->say()` saat menekan tombol `Enter`.
+  - Tombol `[ Clear ]` untuk membersihkan riwayat pesan konsol instance bot yang dipilih.
+
+### 10. Arsitektur Tab List Lucifer v2.85 (Multi-Bot Grid & Real-time Metrics)
+Tab **List** (`[ 📋 List ]`) pada Lucifer v2.85 menyajikan tabel ringkasan terpusat untuk memantau armada bot:
+- **Struktur Kolom Tabel (9 Kolom)**:
+  1. `ID`: ID numerik unik instance bot (misal: `1`, `2`, `3`, `4`).
+  2. `Name`: Nama akun GrowID bot (e.g. `xogavohat`, `rizzxyt`).
+  3. `Level`: Level karakter bot saat ini.
+  4. `Ping`: Latensi jaringan ENet real-time ke server game (ms).
+  5. `Status`: Status koneksi dengan indikator warna (Hijau terang untuk `Online`, abu-abu untuk `Offline`).
+  6. `Proxy`: Alamat endpoint proxy SOCKS5 (`host:port`) atau `Direct`.
+  7. `World`: Nama world yang sedang dihuni bot dalam format kapital (`QUERELE`, `EXIT`, dsb.).
+  8. `Position`: Koordinat ubin lokal bot dalam format `X:Y` (misal: `46:23`).
+  9. `Gems`: Jumlah permata/gems yang terkumpul saat ini.
+- **Interaksi Pemilihan Cepat**:
+  - Mengklik baris bot mana pun pada tabel akan langsung mengubah `selected_bot_id_`, memberikan highlight visual baris aktif, dan menyelaraskan data di tab `Bots`, `Console`, dan `RID`.
+- **Panel Metrik Ringkasan Bawah (Footer 4 Kolom)**:
+  - `Online Count`: Jumlah total bot yang sedang aktif terhubung atau berada di world.
+  - `Offline Count`: Jumlah bot yang sedang disconnected/idle.
+  - `Total Bot Count`: Total seluruh armada bot yang terdaftar di pool.
+  - `Total Gem Count`: Akumulasi gems seluruh bot terdaftar dalam format `Total / Target` (misal: `0 / 0`).
+- **Sesuai Permintaan Pengguna**: Tombol batch status dan pembersih proxy non-aktif (`Remove Status`, `Remove Google Status`, `Remove Location Banned Proxies`, `Remove Offline Proxies`) telah dihilangkan sepenuhnya agar antarmuka bersih dan memaksimalkan ruang vertikal tabel.
 
 
 

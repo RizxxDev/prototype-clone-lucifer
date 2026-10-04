@@ -6,6 +6,8 @@
 #include <thread>
 #include <mutex>
 #include <chrono>
+#include <functional>
+#include "socks5.hpp"
 
 struct lua_State;
 class BotActions;
@@ -13,6 +15,7 @@ class WorldState;
 class EnetClient;
 struct Variant;
 struct GameUpdatePacket;
+struct BotStats;
 
 // ============================================================
 // Bothax & Lucifer Lua Scripting Engine
@@ -43,6 +46,16 @@ public:
     void triggerOnWorldTouch(float x, float y, bool start);
     void triggerOnDraw(float deltatime);
     void triggerOnInput(int key);
+
+    // SOCKS5 Proxy Integration
+    void setProxyCallbacks(std::function<Socks5Config()> get_fn,
+                           std::function<void(const Socks5Config&)> set_fn) {
+        get_proxy_fn_ = get_fn;
+        set_proxy_fn_ = set_fn;
+    }
+    Socks5Config getProxy() const;
+    void setProxy(const Socks5Config& p);
+    void setStats(BotStats* stats) { stats_ = stats; }
 
 private:
     void workerThread(std::string code);
@@ -113,6 +126,15 @@ private:
     static int botGetInventory(lua_State* L);
     static int botGetPlayers(lua_State* L);
     static int botFindItem(lua_State* L);
+    static int botGetPlaytime(lua_State* L);
+    static int botGetAge(lua_State* L);
+    static int botGetActiveTime(lua_State* L);
+    static int botGetLevel(lua_State* L);
+    static int botGetGems(lua_State* L);
+    static int botWrenchPlayer(lua_State* L);
+    static int luaSetProxy(lua_State* L);
+    static int luaGetProxy(lua_State* L);
+    static int luaTestProxy(lua_State* L);
 
     // Internal Structure Helpers
     static void pushNetAvatar(lua_State* L, const std::string& name, int netid, int userid,
@@ -123,6 +145,11 @@ private:
     BotActions& actions_;
     WorldState& world_;
     EnetClient& enet_;
+    BotStats* stats_{nullptr};
+
+    std::function<Socks5Config()> get_proxy_fn_;
+    std::function<void(const Socks5Config&)> set_proxy_fn_;
+    Socks5Config local_proxy_{};
 
     std::atomic<bool> is_running_{false};
     std::atomic<bool> stop_requested_{false};

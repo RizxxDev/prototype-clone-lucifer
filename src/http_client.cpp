@@ -2,6 +2,7 @@
 #include "logger.hpp"
 #include <nlohmann/json.hpp>
 #include <httplib.h>
+#include <sstream>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -10,12 +11,24 @@
 #include <windows.h>
 #include <winhttp.h>
 
-static std::string winHttpPost(const std::string& host_str, int port, const std::string& path_str, const std::string& body, bool is_https, int& out_status) {
+static std::string winHttpPost(const std::string& host_str, int port, const std::string& path_str,
+                              const std::string& body, bool is_https, int& out_status,
+                              const Socks5Config& proxy = {}) {
     out_status = 0;
     std::wstring w_host(host_str.begin(), host_str.end());
     std::wstring w_path(path_str.begin(), path_str.end());
 
-    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64)", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET hSession = NULL;
+    if (proxy.isValid()) {
+        std::wstring w_proxy = L"socks=" + std::wstring(proxy.host.begin(), proxy.host.end()) + L":" + std::to_wstring(proxy.port);
+        hSession = WinHttpOpen(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                               WINHTTP_ACCESS_TYPE_NAMED_PROXY,
+                               w_proxy.c_str(), WINHTTP_NO_PROXY_BYPASS, 0);
+    } else {
+        hSession = WinHttpOpen(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                               WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    }
     if (!hSession) return "";
 
     HINTERNET hConnect = WinHttpConnect(hSession, w_host.c_str(), (INTERNET_PORT)port, 0);
@@ -24,6 +37,13 @@ static std::string winHttpPost(const std::string& host_str, int port, const std:
     DWORD flags = is_https ? WINHTTP_FLAG_SECURE : 0;
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", w_path.c_str(), NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return ""; }
+
+    if (proxy.isValid() && !proxy.username.empty()) {
+        std::wstring w_user(proxy.username.begin(), proxy.username.end());
+        std::wstring w_pass(proxy.password.begin(), proxy.password.end());
+        WinHttpSetOption(hRequest, WINHTTP_OPTION_PROXY_USERNAME, (LPVOID)w_user.c_str(), static_cast<DWORD>(w_user.size() * sizeof(wchar_t)));
+        WinHttpSetOption(hRequest, WINHTTP_OPTION_PROXY_PASSWORD, (LPVOID)w_pass.c_str(), static_cast<DWORD>(w_pass.size() * sizeof(wchar_t)));
+    }
 
     DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID | SECURITY_FLAG_IGNORE_CERT_CN_INVALID | SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
     WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
@@ -71,8 +91,8 @@ static std::string base64Encode(const std::string& in) {
 
 using json = nlohmann::json;
 
-HttpClient::HttpClient(const std::string& base_url, bool use_https)
-    : base_url_(base_url), use_https_(use_https) {}
+HttpClient::HttpClient(const std::string& base_url, bool use_https, const Socks5Config& proxy)
+    : base_url_(base_url), use_https_(use_https), proxy_(proxy) {}
 
 LoginResponse HttpClient::post(
         const std::string& path,
@@ -93,11 +113,87 @@ LoginResponse HttpClient::post(
         // Buang trailing slash
         while (!host.empty() && host.back() == '/') host.pop_back();
 
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-        httplib::Client cli(scheme + host);
-#else
-        httplib::Client cli(scheme + host);
+        int target_port = use_https_ ? 443 : 80;
+        std::string target_host = host;
+        size_t cpos = host.find(':');
+        if (cpos != std::string::npos) {
+            target_host = host.substr(0, cpos);
+            try { target_port = std::stoi(host.substr(cpos + 1)); } catch (...) {}
+        }
+
+        // Jika SOCKS5 diaktifkan dan plain HTTP: Gunakan koneksi SOCKS5 CONNECT langsung
+        if (proxy_.isValid() && !use_https_) {
+            Logger::logDebug("[HTTP-SOCKS5] Mengirim POST melalui proxy ", proxy_.toString(), " ke ", target_host, ":", target_port);
+            std::string err;
+            SOCKET sock = Socks5Client::createConnectedSocket(target_host, static_cast<uint16_t>(target_port), proxy_, 8000, err);
+            if (sock == INVALID_SOCKET) {
+                resp.error = "Gagal terhubung via proxy SOCKS5: " + err;
+                Logger::log("[HTTP] ❌ ", resp.error);
+                return resp;
+            }
+
+            std::string req = "POST " + path + " HTTP/1.1\r\n";
+            req += "Host: " + host + "\r\n";
+            req += "User-Agent: GTPSBot/1.0\r\n";
+            req += "Content-Type: application/x-www-form-urlencoded\r\n";
+            req += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+            req += "Connection: close\r\n";
+            for (const auto& [k, v] : headers) {
+                req += k + ": " + v + "\r\n";
+            }
+            req += "\r\n";
+            req += body;
+
+            send(sock, req.data(), static_cast<int>(req.size()), 0);
+
+            std::string raw_resp;
+            char buf[4096];
+            while (true) {
+                int r = recv(sock, buf, sizeof(buf), 0);
+                if (r <= 0) break;
+                raw_resp.append(buf, r);
+            }
+            closesocket(sock);
+
+            size_t header_end = raw_resp.find("\r\n\r\n");
+            if (header_end != std::string::npos) {
+                std::string header_part = raw_resp.substr(0, header_end);
+                resp.body = raw_resp.substr(header_end + 4);
+
+                size_t first_line_end = header_part.find("\r\n");
+                std::string status_line = (first_line_end != std::string::npos) ? header_part.substr(0, first_line_end) : header_part;
+                std::stringstream ss(status_line);
+                std::string http_ver;
+                int status_code = 0;
+                ss >> http_ver >> status_code;
+                resp.http_status = status_code;
+                if (status_code >= 200 && status_code < 300) {
+                    resp.success = true;
+                } else {
+                    resp.error = "HTTP " + std::to_string(status_code);
+                }
+            } else {
+                resp.error = "Respon HTTP tidak valid dari server via SOCKS5";
+            }
+            return resp;
+        }
+
+#ifdef _WIN32
+        if (proxy_.isValid() && use_https_) {
+            int status = 0;
+            std::string rbody = winHttpPost(target_host, target_port, path, body, true, status, proxy_);
+            resp.http_status = status;
+            resp.body = rbody;
+            if (status >= 200 && status < 300) {
+                resp.success = true;
+            } else {
+                resp.error = "HTTPS via SOCKS5 status " + std::to_string(status);
+            }
+            return resp;
+        }
 #endif
+
+        httplib::Client cli(scheme + host);
         cli.set_connection_timeout(10, 0);
         cli.set_read_timeout(15, 0);
 
@@ -147,8 +243,6 @@ LoginResponse HttpClient::login(
     resp.raw_json = "";
 
     // Format login Growtopia (form-urlencoded)
-    // Klien asli pakai field: growId, password, protocol, etc.
-    // GTPS biasanya modifikasi, jadi kita coba format umum.
     std::string body =
         "growId=" + growid +
         "&password=" + password +
@@ -156,7 +250,7 @@ LoginResponse HttpClient::login(
         "&platform=" + platform +
         "&protocol=177";
 
-    Logger::log("[LOGIN] Mencoba login sebagai: ", growid);
+    Logger::log("[LOGIN] Mencoba login sebagai: ", growid, (proxy_.isValid() ? (" via Proxy " + proxy_.toString()) : " (Direct)"));
 
     // POST ke login URL
     std::string host = base_url_;
@@ -168,8 +262,8 @@ LoginResponse HttpClient::login(
         host = host.substr(0, slash);
     }
 
-    // Reconstruct
-    HttpClient tmp(host, use_https_);
+    // Reconstruct dengan proxy yang sama
+    HttpClient tmp(host, use_https_, proxy_);
     resp = tmp.post(path, body);
 
     if (!resp.success) {
@@ -225,7 +319,7 @@ LoginResponse HttpClient::login(
             std::string val_body = "_token=" + b64_token + "&growId=" + growid + "&password=" + password;
             int status = 0;
 #ifdef _WIN32
-            std::string val_res = winHttpPost(dash_host, 443, "/player/growid/login/validate", val_body, true, status);
+            std::string val_res = winHttpPost(dash_host, 443, "/player/growid/login/validate", val_body, true, status, proxy_);
             if (status >= 200 && status < 300 && !val_res.empty()) {
                 try {
                     auto j = json::parse(val_res);
@@ -251,7 +345,6 @@ LoginResponse HttpClient::login(
             auto j = json::parse(resp.body);
             resp.raw_json = resp.body;
 
-            // Coba beberapa field umum GTPS
             if (j.contains("token"))       resp.token = j["token"];
             else if (j.contains("ltoken")) resp.token = j["ltoken"];
 
@@ -271,4 +364,84 @@ LoginResponse HttpClient::login(
     }
 
     return resp;
+}
+
+static std::string s_cached_direct_ip = "182.9.36.244";
+static std::atomic<bool> s_refreshing_direct_ip{false};
+
+std::string HttpClient::getCachedDirectIp() {
+    refreshDirectIpAsync();
+    return s_cached_direct_ip;
+}
+
+void HttpClient::refreshDirectIpAsync() {
+    if (s_refreshing_direct_ip.exchange(true)) return;
+    std::thread([]() {
+        std::string ip = fetchPublicIp();
+        if (!ip.empty()) {
+            s_cached_direct_ip = ip;
+        }
+        s_refreshing_direct_ip = false;
+    }).detach();
+}
+
+std::string HttpClient::fetchPublicIp(const Socks5Config& proxy, int timeout_ms) {
+    if (proxy.isValid()) {
+        std::string err;
+        SOCKET sock = Socks5Client::createConnectedSocket("api.ipify.org", 80, proxy, timeout_ms, err);
+        if (sock == INVALID_SOCKET) {
+            sock = Socks5Client::createConnectedSocket("icanhazip.com", 80, proxy, timeout_ms, err);
+        }
+        if (sock != INVALID_SOCKET) {
+            std::string req = "GET / HTTP/1.1\r\nHost: api.ipify.org\r\nUser-Agent: curl/7.84.0\r\nConnection: close\r\n\r\n";
+            send(sock, req.data(), static_cast<int>(req.size()), 0);
+            std::string raw;
+            char buf[1024];
+            while (true) {
+                int r = recv(sock, buf, sizeof(buf) - 1, 0);
+                if (r <= 0) break;
+                raw.append(buf, r);
+            }
+            closesocket(sock);
+            size_t pos = raw.find("\r\n\r\n");
+            if (pos != std::string::npos) {
+                std::string body = raw.substr(pos + 4);
+                while (!body.empty() && (body.back() == '\r' || body.back() == '\n' || body.back() == ' ')) body.pop_back();
+                while (!body.empty() && body.front() == ' ') body.erase(body.begin());
+                if (!body.empty() && body.find('.') != std::string::npos) {
+                    return body;
+                }
+            }
+        }
+        return proxy.host;
+    }
+
+    // Direct mode
+    try {
+        httplib::Client cli("http://api.ipify.org");
+        cli.set_connection_timeout(timeout_ms / 1000 > 0 ? timeout_ms / 1000 : 2, 0);
+        cli.set_read_timeout(timeout_ms / 1000 > 0 ? timeout_ms / 1000 : 2, 0);
+        auto res = cli.Get("/");
+        if (res && res->status == 200 && !res->body.empty()) {
+            std::string ip = res->body;
+            while (!ip.empty() && (ip.back() == '\r' || ip.back() == '\n' || ip.back() == ' ')) ip.pop_back();
+            while (!ip.empty() && ip.front() == ' ') ip.erase(ip.begin());
+            if (ip.find('.') != std::string::npos) return ip;
+        }
+    } catch (...) {}
+
+    try {
+        httplib::Client cli("http://icanhazip.com");
+        cli.set_connection_timeout(timeout_ms / 1000 > 0 ? timeout_ms / 1000 : 2, 0);
+        cli.set_read_timeout(timeout_ms / 1000 > 0 ? timeout_ms / 1000 : 2, 0);
+        auto res = cli.Get("/");
+        if (res && res->status == 200 && !res->body.empty()) {
+            std::string ip = res->body;
+            while (!ip.empty() && (ip.back() == '\r' || ip.back() == '\n' || ip.back() == ' ')) ip.pop_back();
+            while (!ip.empty() && ip.front() == ' ') ip.erase(ip.begin());
+            if (ip.find('.') != std::string::npos) return ip;
+        }
+    } catch (...) {}
+
+    return s_cached_direct_ip.empty() ? "182.9.36.244" : s_cached_direct_ip;
 }

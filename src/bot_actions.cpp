@@ -105,6 +105,12 @@ void BotActions::wrench(int tile_x, int tile_y) {
     Logger::log("[ACTION] 🔧 Wrench tile (", tile_x, ", ", tile_y, ")");
 }
 
+void BotActions::wrenchPlayer(int net_id) {
+    if (!enet_.isConnected()) return;
+    enet_.sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT, "action|wrench\nnetid|" + std::to_string(net_id) + "\n");
+    Logger::log("[ACTION] 🔧 Wrench player NetID=", net_id);
+}
+
 void BotActions::enter() {
     if (!enet_.isConnected()) return;
 
@@ -178,6 +184,18 @@ void BotActions::trash(uint16_t item_id, int count) {
 
 void BotActions::say(const std::string& text) {
     if (!enet_.isConnected() || text.empty()) return;
+
+    // Anti-spam delay: pastikan ada jeda minimal 1.8 detik antar chat/command
+    {
+        std::unique_lock<std::mutex> lock(say_mtx_);
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_say_time_).count();
+        if (elapsed < 1800) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1800 - elapsed));
+        }
+        last_say_time_ = std::chrono::steady_clock::now();
+    }
+
     std::string packet_str = "action|input\n|text|" + text + "\n";
     enet_.sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT, packet_str);
     Logger::log("[ACTION] 💬 Chat: \"", text, "\"");

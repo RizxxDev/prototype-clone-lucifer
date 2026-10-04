@@ -210,3 +210,50 @@ Pada GTPS modern yang menggunakan sistem Dashboard / Web Validation (seperti Cre
      ltoken|<token_dari_web_validate>
      ```
    - Tanpa baris `ltoken`, server utama akan menahan bot di pre-auth, mengirimkan dialog verifikasi (`OnDialogRequest`), atau memutus koneksi secara pasif.
+
+---
+
+## 8. Protokol Dialog Profil & Ekstraksi Statistik (`OnDialogRequest`)
+
+Untuk memperoleh statistik pemain (Level, Gems, Played Hours, Account Age) persis seperti klien resmi dan Lucifer v2.85:
+
+### A. Alur Permintaan Wrench Profil Diri Sendiri
+1. Bot menunggu jeda 2.5 detik pasca-spawn (`OnSpawn`) agar koneksi game stabil.
+2. Bot mengirimkan tepat 1 paket teks `NET_MESSAGE_GENERIC_TEXT`:
+   ```text
+   action|wrench
+   netid|<local_net_id>
+   ```
+3. Server membalas dengan paket variant `OnDialogRequest` berisi dialog profil lengkap.
+
+### B. Struktur Payload Dialog Profil Khas GTPS
+```text
+set_default_color|`o
+add_label_icon|big|`wActive effects:``|left|32|
+add_textbox|`2<icon>`o Double Jump|left|
+add_textbox|`2<icon>`o Enhanced Digging|left|
+add_textbox|You have `w36`` backpack slots.|left|
+add_textbox|Current world: `wRIZIQ`` (`w90``, `w25``) (`w2`` people)|left|
+add_textbox|You have the Recycler.|left|
+add_textbox|You are standing on the note "F".|left|
+add_textbox|Total time played is `w14.85`` hours.  This account was created `w5`` days ago.|left|
+end_dialog|profile|Continue||
+```
+
+### C. Pola Regex Ekstraksi Statistik:
+- **Total Played Hours**:
+  `R"((?:total\s+time\s+played|time\s+played|total\s+playtime|played\s+for|playtime|played)\s*(?:is|:|=)?\s*([0-9]+(?:\.[0-9]+)?)\s*hours?)"`
+  Mengambil nilai `14.85` dari `"Total time played is 14.85 hours."`.
+- **Account Age (Hari)**:
+  `R"((?:account\s+was\s+created|was\s+created|created)\s+([0-9]+)\s*days?\s*ago)"`
+  Mengambil nilai `5` dari `"This account was created 5 days ago."`.
+- **Sanitasi Color Codes (Penting!)**:
+  Dalam Growtopia, tag ``` adalah tag reset warna bawaan. Fungsi `stripColorCodes` wajib menghapus seluruh pasangan karakter '`' dan kode warnanya agar tidak meninggalkan karakter backtick liar yang dapat merusak parsing angka numerik (misal `14.85`` menjadi `14.85` `).
+- **Auto-Dismiss Dialog**:
+  Setelah dialog berhasil dibaca, bot mengirimkan penutup dialog setelah jeda manusia 800ms:
+  ```text
+  action|dialog_return
+  dialog_name|<dname>
+  buttonClicked|
+  ```
+

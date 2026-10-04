@@ -13,6 +13,9 @@
 #include <atomic>
 #include <memory>
 #include <functional>
+#include "socks5.hpp"
+#include "bot_stats.hpp"
+#include "console_entry.hpp"
 
 class EnetClient;
 class WorldState;
@@ -49,6 +52,10 @@ public:
     // Bot Manager Setter
     void setBotManager(BotManager* mgr) { bot_manager_ = mgr; }
 
+    BotStats& getStats() { return gui_stats_; }
+    const BotStats& getStats() const { return gui_stats_; }
+    void addFallbackConsoleMessage(ConsoleMsgType type, const std::string& msg);
+
     enum class LuciferTopTab {
         Bots = 0,
         List,
@@ -66,7 +73,8 @@ public:
         Console,
         Automation,
         Rotation,
-        Logs
+        Logs,
+        RID
     };
 
     void renderMainLayout();
@@ -102,6 +110,7 @@ public:
     void renderSubTabAutomation();
     void renderSubTabRotation();
     void renderSubTabLogs();
+    void renderSubTabRID();
 
     void applyLuciferTheme();
 
@@ -131,6 +140,7 @@ public:
     ReconnectController& reconnect_ctrl_;
     std::function<void()> reconnect_fn_;
     BotManager* bot_manager_ = nullptr;
+    BotStats gui_stats_;
 
     // Movement (Tanda Panah) Buffers
     int move_step_ = 1; // 1 tile per click/keypress
@@ -157,7 +167,22 @@ public:
     int selected_bot_id_ = 1;
     char accounts_file_path_[256] = "cache/accounts.txt";
 
-    // Proxy Test Buffers
+    // Proxy Test & Quick Buffers
+    char new_bot_proxy_quick_[256] = "";
+    char sel_bot_proxy_quick_[256] = "";
+    char tab_proxy_quick_[256] = "";
+    char sel_proxy_host_[128] = "";
+    int sel_proxy_port_ = 1080;
+    char sel_proxy_user_[64] = "";
+    char sel_proxy_pass_[64] = "";
+    bool sel_use_proxy_ = false;
+    char sel_proxy_test_result_[256] = "";
+    char batch_proxy_text_[4096] = "";
+    Socks5Config main_proxy_{};
+
+    void setMainProxy(const Socks5Config& p) { main_proxy_ = p; }
+    const Socks5Config& getMainProxy() const { return main_proxy_; }
+
     char proxy_test_host_[128] = "127.0.0.1";
     int proxy_test_port_ = 1080;
     char proxy_test_user_[64] = "";
@@ -167,9 +192,18 @@ public:
     // Script Editor Buffers
     char script_buffer_[16384]{};
 
-    // Console Buffers
+    // Console & Log Buffers
     char log_filter_[128] = "";
     bool auto_scroll_log_ = true;
+
+    // Dedicated In-Game Console (Lucifer v2.85)
+    bool console_enable_ = true;
+    bool console_show_timestamps_ = true;
+    bool console_auto_scroll_ = true;
+    int console_filter_ = 0; // 0: All, 1: World, 2: Private, 3: System
+    char console_chat_input_[256] = "";
+    mutable std::mutex fallback_console_mtx_;
+    std::vector<ConsoleEntry> fallback_console_entries_;
 
     // Active Navigation Tabs
     LuciferTopTab current_top_tab_ = LuciferTopTab::Bots;

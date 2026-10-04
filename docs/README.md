@@ -79,6 +79,7 @@ build/Release/gtps_bot.exe
    CLIENT_VERSION=5.58
    CLIENT_PROTOCOL=225
    TARGET_WORLD=START
+   SOCKS5_PROXY=127.0.0.1:1080:user:pass
    ```
 
 2. **Konfigurasi Multi-Bot (Opsional)**:

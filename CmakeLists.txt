@@ -90,6 +90,7 @@ add_executable(gtps_bot
     src/bot_instance.cpp
     src/bot_manager.cpp
     src/item_database.cpp
+    src/bot_stats.cpp
 )
 
 target_include_directories(gtps_bot PRIVATE

@@ -51,6 +51,7 @@ public:
     std::string default_version = "5.58";
     std::string default_platform = "windows";
     int default_protocol = 225;
+    Socks5Config default_proxy = {};
 
 private:
     ThreadPool pool_;

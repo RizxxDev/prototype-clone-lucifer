@@ -4,6 +4,8 @@
 #include <thread>
 #include <cstdint>
 #include <memory>
+#include <chrono>
+#include <mutex>
 
 class EnetClient;
 class WorldState;
@@ -21,6 +23,7 @@ public:
     void hit(int tile_x, int tile_y);
     void place(uint16_t item_id, int tile_x, int tile_y);
     void wrench(int tile_x, int tile_y);
+    void wrenchPlayer(int net_id);
     void enter();
 
     // Inventory & Item Interaction
@@ -40,6 +43,8 @@ public:
 private:
     EnetClient& enet_;
     WorldState& world_;
+    std::mutex say_mtx_;
+    std::chrono::steady_clock::time_point last_say_time_{};
 };
 
 class AutoFarmController {

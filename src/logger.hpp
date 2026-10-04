@@ -62,17 +62,14 @@ public:
         std::string res;
         res.reserve(input.size());
         for (size_t i = 0; i < input.size(); ++i) {
-            if (input[i] == '`' && i + 1 < input.size()) {
-                char next = input[i + 1];
-                if (next == '`') {
-                    res += '`';
-                    i++;
-                } else {
+            if (input[i] == '`') {
+                // Lewati '`' dan karakter kode warna setelahnya jika ada (termasuk `` untuk reset)
+                if (i + 1 < input.size()) {
                     i++;
                 }
-            } else if (input[i] == '\r') {
-                // Lewati carriage return
-            } else {
+                continue;
+            }
+            if (input[i] != '\r') {
                 res += input[i];
             }
         }

@@ -13,12 +13,17 @@ WorldState::WorldState() {
 
 std::string WorldState::stripColorCodes(const std::string& text) {
     std::string clean;
+    clean.reserve(text.size());
     for (size_t i = 0; i < text.size(); ++i) {
-        if (text[i] == '`' && i + 1 < text.size()) {
-            i++; // skip '`' and color code character
+        if (text[i] == '`') {
+            if (i + 1 < text.size()) {
+                i++;
+            }
             continue;
         }
-        clean.push_back(text[i]);
+        if (text[i] != '\r') {
+            clean.push_back(text[i]);
+        }
     }
     return clean;
 }
@@ -53,6 +58,8 @@ void WorldState::parseSpawn(const std::string& spawn_str, const std::string& my_
             try { p.net_id = std::stoi(val); } catch (...) {}
         } else if (key == "userID") {
             try { p.user_id = std::stoi(val); } catch (...) {}
+        } else if (key == "level") {
+            try { p.level = std::stoi(val); } catch (...) {}
         } else if (key == "name") {
             p.name = val;
         } else if (key == "country") {
@@ -238,6 +245,11 @@ int WorldState::getLocalNetId() {
 void WorldState::setLocalNetId(int net_id) {
     std::lock_guard<std::mutex> lock(mtx_);
     local_player_.net_id = net_id;
+}
+
+int WorldState::getLocalLevel() {
+    std::lock_guard<std::mutex> lock(mtx_);
+    return local_player_.level;
 }
 
 std::string WorldState::getWorldName() {

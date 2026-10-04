@@ -53,6 +53,7 @@ int main(int argc, char** argv) {
     std::string platform   = "windows";
     int         protocol   = 225;
     std::string target_world = "";
+    Socks5Config main_proxy{};
 
     bool loaded = false;
 
@@ -73,6 +74,18 @@ int main(int argc, char** argv) {
             target_world = EnvConfig::get(env, "TARGET_WORLD", target_world);
             Logger::verbose = EnvConfig::getBool(env, "LOG_VERBOSE", true);
             Logger::hexdump = EnvConfig::getBool(env, "LOG_HEXDUMP", false);
+
+            std::string socks5_proxy_str = EnvConfig::get(env, "SOCKS5_PROXY", "");
+            if (!socks5_proxy_str.empty()) {
+                main_proxy = Socks5Config::parse(socks5_proxy_str);
+            } else {
+                main_proxy.enabled = EnvConfig::getBool(env, "SOCKS5_ENABLED", false);
+                main_proxy.host = EnvConfig::get(env, "SOCKS5_HOST", "");
+                main_proxy.port = static_cast<uint16_t>(EnvConfig::getInt(env, "SOCKS5_PORT", 1080));
+                main_proxy.username = EnvConfig::get(env, "SOCKS5_USERNAME", "");
+                main_proxy.password = EnvConfig::get(env, "SOCKS5_PASSWORD", "");
+            }
+
             loaded = true;
             Logger::log("[*] Konfigurasi dimuat dari: ", env_file);
         }
@@ -99,6 +112,20 @@ int main(int argc, char** argv) {
                 platform   = cfg["client"].value("platform", platform);
                 protocol   = cfg["client"].value("protocol", protocol);
                 target_world = cfg["client"].value("target_world", target_world);
+
+                if (cfg.contains("proxy") || cfg.contains("socks5")) {
+                    auto p = cfg.contains("proxy") ? cfg["proxy"] : cfg["socks5"];
+                    if (p.is_string()) {
+                        main_proxy = Socks5Config::parse(p.get<std::string>());
+                    } else if (p.is_object()) {
+                        main_proxy.enabled = p.value("enabled", false);
+                        main_proxy.host = p.value("host", "");
+                        main_proxy.port = static_cast<uint16_t>(p.value("port", 1080));
+                        main_proxy.username = p.value("username", "");
+                        main_proxy.password = p.value("password", "");
+                    }
+                }
+
                 loaded = true;
                 Logger::log("[*] Konfigurasi dimuat dari: ", json_file);
             }
@@ -116,13 +143,14 @@ int main(int argc, char** argv) {
     Logger::log("    Game         : ", game_host, ":", game_port);
     Logger::log("    Akun Default : ", acc_name.empty() ? "(Belum diatur / Standalone Multi-Bot mode)" : acc_name);
     Logger::log("    Target World : ", target_world.empty() ? "(none)" : target_world);
+    Logger::log("    Proxy SOCKS5 : ", main_proxy.isValid() ? main_proxy.toString() : "(Direct / Tanpa Proxy)");
 
     // ---- Fase 1a: HTTP Login ----
     LoginResponse login_resp{};
     if (!acc_name.empty()) {
         Logger::log("\n--- FASE 1a: HTTP Login ---");
 
-        HttpClient http(login_url, use_https);
+        HttpClient http(login_url, use_https, main_proxy);
         login_resp = http.login(acc_name, acc_pass, version, platform);
 
         if (!login_resp.success) {
@@ -209,6 +237,29 @@ int main(int argc, char** argv) {
         std::atomic<bool> redirecting{false};
         std::atomic<bool> in_world{false};
 
+        std::unique_ptr<Socks5UdpTunnel> single_bot_tunnel;
+        auto get_enet_target = [&](const std::string& target_host, int target_port, std::string& out_host, int& out_port) {
+            if (main_proxy.isValid()) {
+                if (!single_bot_tunnel) single_bot_tunnel = std::make_unique<Socks5UdpTunnel>();
+                single_bot_tunnel->stop();
+                std::string terr;
+                if (single_bot_tunnel->start(main_proxy, target_host, static_cast<uint16_t>(target_port), terr)) {
+                    out_host = single_bot_tunnel->getLocalHost();
+                    out_port = single_bot_tunnel->getLocalPort();
+                    Logger::log("[MAIN] ✅ SOCKS5 UDP Tunnel aktif (Full TCP+UDP): 127.0.0.1:", out_port, " -> ", target_host, ":", target_port);
+                    return true;
+                } else {
+                    Logger::log("[MAIN] ⚠️ SOCKS5 UDP Tunnel tidak aktif: ", terr);
+                    if (main_proxy.udp_fallback_direct) {
+                        Logger::log("[MAIN] 🌐 Mengaktifkan Mode Hybrid: HTTP Login via SOCKS5 Proxy, Game via Direct UDP.");
+                    }
+                }
+            }
+            out_host = target_host;
+            out_port = target_port;
+            return true;
+        };
+
         std::function<void()> do_reconnect = [&]() {
             if (acc_name.empty()) return;
             if (redirecting.load()) return;
@@ -222,7 +273,7 @@ int main(int argc, char** argv) {
 
             if (!login_url.empty() && login_url.find("growtopia") != std::string::npos) {
                 try {
-                    HttpClient http_retry(login_url, use_https);
+                    HttpClient http_retry(login_url, use_https, main_proxy);
                     auto retry_login = http_retry.login(acc_name, acc_pass, version, platform);
                     if (retry_login.success) {
                         if (!retry_login.server_ip.empty()) game_host = retry_login.server_ip;
@@ -235,7 +286,11 @@ int main(int argc, char** argv) {
 
             current_handshake = build_handshake(login_resp.meta);
 
-            if (enet.connect(game_host, game_port, 5000)) {
+            std::string conn_host;
+            int conn_port = 0;
+            get_enet_target(game_host, game_port, conn_host, conn_port);
+
+            if (enet.connect(conn_host, conn_port, 5000)) {
                 Logger::log("[RECONNECT] ✅ ENet terhubung ke ", game_host, ":", game_port);
             } else {
                 Logger::log("[RECONNECT] ❌ Gagal connect ENet ke ", game_host, ":", game_port);
@@ -274,6 +329,11 @@ int main(int argc, char** argv) {
             }
         };
 
+        BotStats single_stats;
+        if (!acc_name.empty()) {
+            single_stats.loadFromFile(acc_name);
+        }
+
         // Callback untuk paket masuk dari server
         enet.onPacket([&](const GtPacketData& pkt) {
             if (pkt.type == GtPacket::NET_MESSAGE_SERVER_HELLO) {
@@ -288,12 +348,16 @@ int main(int argc, char** argv) {
                 std::string text((const char*)pkt.payload.data(), pkt.payload.size());
                 while (!text.empty() && text.back() == '\0') text.pop_back();
 
+                std::string clean = Logger::stripColorCodes(text);
+                if (single_stats.parseFromText(clean)) {
+                    if (!acc_name.empty()) single_stats.saveToFile(acc_name);
+                }
+
                 if (text.find("action|play_sfx") == std::string::npos &&
                     text.find("action|ping") == std::string::npos &&
                     text.find("add_label") == std::string::npos &&
                     text.find("add_button") == std::string::npos &&
                     text.find("add_spacer") == std::string::npos) {
-                    std::string clean = Logger::stripColorCodes(text);
                     while (!clean.empty() && (clean.back() == '\r' || clean.back() == '\n' || clean.back() == ' ')) clean.pop_back();
                     if (!clean.empty() && clean.size() < 120) {
                         Logger::log("  💬 Server: ", clean);
@@ -326,6 +390,7 @@ int main(int argc, char** argv) {
                 else if (tank_type == PACKET_SEND_MAP_DATA) {
                     in_world = true;
                     reconnect_ctrl.onConnected();
+                    single_stats.startSession();
                     if (pkt.payload.size() > sizeof(GameUpdatePacket)) {
                         world.parseMapData(pkt.payload.data() + sizeof(GameUpdatePacket),
                                            pkt.payload.size() - sizeof(GameUpdatePacket));
@@ -348,6 +413,11 @@ int main(int argc, char** argv) {
                     if (pkt.payload.size() > sizeof(GameUpdatePacket)) {
                         world.parseInventory(pkt.payload.data() + sizeof(GameUpdatePacket),
                                              pkt.payload.size() - sizeof(GameUpdatePacket));
+                    }
+                    int inv_gems = world.getItemCount(112);
+                    if (inv_gems > 0) {
+                        single_stats.gems = inv_gems;
+                        if (!acc_name.empty()) single_stats.saveToFile(acc_name);
                     }
                     Logger::log("[+] 🎒 Inventory state diterima! Pemain siap di server.");
                     warp_to_target_world();
@@ -388,10 +458,35 @@ int main(int argc, char** argv) {
                         else if (fn.find("OnSpawn") != std::string::npos) {
                             in_world = true;
                             reconnect_ctrl.onConnected();
+                            single_stats.startSession();
                             std::string spawn_data = vars.size() > 1 ? vars[1].str_val : "";
                             world.parseSpawn(spawn_data, acc_name);
+                            int lvl = world.getLocalLevel();
+                            if (lvl > 0 && lvl < 250) {
+                                single_stats.level = lvl;
+                                if (!acc_name.empty()) single_stats.saveToFile(acc_name);
+                            }
                             Logger::log("[+] 👤 OnSpawn diterima! Karakter terdaftar di world.");
                             Logger::log("[+] ✅ Akun sekarang ONLINE di dalam game!");
+
+                            // Otomatis sinkronisasi profil diri sendiri seperti Lucifer bot asli
+                            std::thread([&enet, &world, &in_world, &single_stats]() {
+                                // Delay 2.5s setelah spawn sebelum wrench agar server stabil dan tidak memicu spam
+                                std::this_thread::sleep_for(std::chrono::milliseconds(2500));
+                                if (in_world.load() && enet.isConnected()) {
+                                    int my_netid = world.getLocalNetId();
+                                    if (my_netid >= 0) {
+                                        enet.sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT, "action|wrench\nnetid|" + std::to_string(my_netid) + "\n");
+                                    }
+                                }
+                                // Fallback /status hanya setelah 4s jika stats belum terisi
+                                std::this_thread::sleep_for(std::chrono::milliseconds(4000));
+                                if (in_world.load() && enet.isConnected()) {
+                                    if (single_stats.level <= 1 && single_stats.played_hours <= 0.0f) {
+                                        enet.sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT, "action|input\n|text|/status\n");
+                                    }
+                                }
+                            }).detach();
                         }
                         else if (fn.find("OnSetPos") != std::string::npos) {
                             if (vars.size() > 1 && vars[1].type == 3) {
@@ -405,9 +500,92 @@ int main(int argc, char** argv) {
                             std::string remove_data = vars.size() > 1 ? vars[1].str_val : "";
                             world.parseRemove(remove_data);
                         }
+                        else if (fn.find("OnSetBumperCoinValues") != std::string::npos) {
+                            if (vars.size() > 1) {
+                                single_stats.gems = get_vint(vars[1]);
+                                if (vars.size() > 2) {
+                                    int val2 = get_vint(vars[2]);
+                                    if (val2 > 0 && val2 < 250) {
+                                        single_stats.level = val2;
+                                    }
+                                }
+                                if (!acc_name.empty()) single_stats.saveToFile(acc_name);
+                                Logger::log("[+] 💎 Stats diperbarui (OnSetBumperCoinValues): Gems=", single_stats.gems, ", Level=", single_stats.level);
+                            }
+                        }
+                        else if (fn.find("OnSetGems") != std::string::npos || fn.find("SetGems") != std::string::npos) {
+                            if (vars.size() > 1) {
+                                single_stats.gems = get_vint(vars[1]);
+                                if (!acc_name.empty()) single_stats.saveToFile(acc_name);
+                                Logger::log("[+] 💎 Stats Gems diperbarui: ", single_stats.gems);
+                            }
+                        }
+                        else if (fn.find("OnSetLevel") != std::string::npos || fn.find("SetLevel") != std::string::npos) {
+                            if (vars.size() > 1) {
+                                int lvl = get_vint(vars[1]);
+                                if (lvl > 0 && lvl < 250) {
+                                    single_stats.level = lvl;
+                                    if (!acc_name.empty()) single_stats.saveToFile(acc_name);
+                                    Logger::log("[+] ⭐ Stats Level diperbarui: ", single_stats.level);
+                                }
+                            }
+                        }
+                        else if (fn.find("OnDialogRequest") != std::string::npos) {
+                            if (vars.size() > 1) {
+                                std::string dmsg = vars[1].str_val;
+                                if (single_stats.parseFromText(dmsg)) {
+                                    if (!acc_name.empty()) single_stats.saveToFile(acc_name);
+                                    Logger::log("[+] 📊 Stats diperbarui dari OnDialogRequest: Level=", single_stats.level,
+                                                ", Gems=", single_stats.gems, ", Played=", single_stats.getEffectivePlayedHours(),
+                                                "h, Age=", single_stats.getEffectiveAgeDays(), "d");
+                                }
+
+                                if (dmsg.find("personal_info") != std::string::npos ||
+                                    dmsg.find("Show Personal") != std::string::npos) {
+                                    std::string dname = "popup";
+                                    size_t epos = dmsg.find("end_dialog|");
+                                    if (epos != std::string::npos) {
+                                        size_t dname_start = epos + 11;
+                                        size_t pipe = dmsg.find('|', dname_start);
+                                        if (pipe != std::string::npos) {
+                                            dname = dmsg.substr(dname_start, pipe - dname_start);
+                                        }
+                                    }
+                                    // Beri jeda 600ms (reaksi klik tombol manusia) dan kirim HANYA 1 paket dialog_return
+                                    std::thread([&enet, dname]() {
+                                        std::this_thread::sleep_for(std::chrono::milliseconds(600));
+                                        if (enet.isConnected()) {
+                                            enet.sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT,
+                                                "action|dialog_return\ndialog_name|" + dname + "\nbuttonClicked|personal_info\n");
+                                        }
+                                    }).detach();
+                                } else if (dmsg.find("Total time played") != std::string::npos ||
+                                           dmsg.find("created") != std::string::npos) {
+                                    std::string dname = "popup";
+                                    size_t epos = dmsg.find("end_dialog|");
+                                    if (epos != std::string::npos) {
+                                        size_t dname_start = epos + 11;
+                                        size_t pipe = dmsg.find('|', dname_start);
+                                        if (pipe != std::string::npos) {
+                                            dname = dmsg.substr(dname_start, pipe - dname_start);
+                                        }
+                                    }
+                                    std::thread([&enet, dname]() {
+                                        std::this_thread::sleep_for(std::chrono::milliseconds(800));
+                                        if (enet.isConnected()) {
+                                            enet.sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT,
+                                                "action|dialog_return\ndialog_name|" + dname + "\nbuttonClicked|\n");
+                                        }
+                                    }).detach();
+                                }
+                            }
+                        }
                         else if (fn.find("OnTalkBubble") != std::string::npos) {
                             int bubble_netid = vars.size() > 1 ? get_vint(vars[1]) : -1;
                             std::string bubble_msg = vars.size() > 2 ? vars[2].str_val : "";
+                            if (single_stats.parseFromText(bubble_msg)) {
+                                if (!acc_name.empty()) single_stats.saveToFile(acc_name);
+                            }
                             Logger::log("  💬 [Bubble NetID #", bubble_netid, "]: ", bubble_msg);
                         }
                         else if (fn.find("OnFailedToEnterWorld") != std::string::npos) {
@@ -422,7 +600,14 @@ int main(int argc, char** argv) {
                         }
                         else if (fn.find("OnConsoleMessage") != std::string::npos) {
                             if (vars.size() > 1) {
-                                Logger::log("  💬 Console: ", vars[1].str_val);
+                                std::string cmsg = vars[1].str_val;
+                                std::string clean = Logger::stripColorCodes(cmsg);
+                                if (single_stats.parseFromText(clean)) {
+                                    if (!acc_name.empty()) single_stats.saveToFile(acc_name);
+                                    Logger::log("[+] 📊 Stats diperbarui dari OnConsoleMessage: Level=", single_stats.level,
+                                                ", Gems=", single_stats.gems, ", Age=", single_stats.getEffectiveAgeDays(), "d");
+                                }
+                                Logger::log("  💬 Console: ", clean);
                             }
                         }
                         else if (fn.find("OnSendToServer") != std::string::npos) {
@@ -462,7 +647,7 @@ int main(int argc, char** argv) {
                             std::string sub_handshake = build_handshake(login_resp.meta, userId, token, door_id, lmode);
 
                             // Hubungkan ke subserver pada background thread
-                            std::thread([&enet, &world, sub_host, sub_port, sub_handshake, &current_handshake, &handshake_sent, &auto_warped, &warped_to_target, &in_world, &redirecting]() {
+                            std::thread([&enet, &world, sub_host, sub_port, sub_handshake, &current_handshake, &handshake_sent, &auto_warped, &warped_to_target, &in_world, &redirecting, &get_enet_target]() {
                                 redirecting = true;
                                 Logger::log("[*] 🔄 Mengalihkan koneksi ke sub-server ", sub_host, ":", sub_port, "...");
                                 enet.disconnect();
@@ -475,7 +660,11 @@ int main(int argc, char** argv) {
                                 warped_to_target = false;
                                 in_world = false;
 
-                                if (enet.connect(sub_host, sub_port, 6000)) {
+                                std::string conn_host;
+                                int conn_port = 0;
+                                get_enet_target(sub_host, sub_port, conn_host, conn_port);
+
+                                if (enet.connect(conn_host, conn_port, 6000)) {
                                     Logger::log("[+] ✅ Terhubung ke sub-server ", sub_host, ":", sub_port);
                                 } else {
                                     Logger::log("[!] ❌ Gagal terhubung ke sub-server!");
@@ -531,7 +720,11 @@ int main(int argc, char** argv) {
         });
 
         if (!acc_name.empty()) {
-            if (!enet.connect(game_host, game_port, 5000)) {
+            std::string conn_host;
+            int conn_port = 0;
+            get_enet_target(game_host, game_port, conn_host, conn_port);
+
+            if (!enet.connect(conn_host, conn_port, 5000)) {
                 Logger::log("[!] Gagal connect ENet ke ", game_host, ":", game_port);
                 Logger::log("    Cek: server GTPS ENet jalan? port benar? firewall?");
                 Logger::log("    Auto-reconnect akan mencoba menyambung ulang...");
@@ -542,6 +735,8 @@ int main(int argc, char** argv) {
         BotInfo info{acc_name, version, platform, game_host, game_port};
         LuciferGui gui(enet, world, actions, autofarm, lua_engine, info, g_running,
                        fingerprint, reconnect_ctrl, do_reconnect);
+        gui.setMainProxy(main_proxy);
+        gui.getStats() = single_stats;
 
         // Inisialisasi Multi-Bot Manager & Thread Pool
         BotManager bot_manager(4);
@@ -552,10 +747,11 @@ int main(int argc, char** argv) {
         bot_manager.default_version = version;
         bot_manager.default_platform = platform;
         bot_manager.default_protocol = protocol;
+        bot_manager.default_proxy = main_proxy;
 
         // Daftarkan akun utama ke manager jika dikonfigurasi
         if (!acc_name.empty()) {
-            bot_manager.addBot(acc_name, acc_pass, target_world);
+            bot_manager.addBot(acc_name, acc_pass, target_world, main_proxy);
         }
 
         // Muat akun dari cache/accounts.txt atau migrasi dari accounts.txt

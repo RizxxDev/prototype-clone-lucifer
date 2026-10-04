@@ -11,6 +11,7 @@
 #include "socks5.hpp"
 #include "bot_manager.hpp"
 #include "item_database.hpp"
+#include "http_client.hpp"
 
 #include "imgui.h"
 #include "imgui_impl_win32.h"
@@ -63,6 +64,10 @@ LuciferGui::LuciferGui(EnetClient& enet, WorldState& world, BotActions& actions,
     strncpy_s(cfg_account_name_, info_.account_name.c_str(), sizeof(cfg_account_name_) - 1);
     strncpy_s(cfg_server_ip_, info_.game_host.c_str(), sizeof(cfg_server_ip_) - 1);
     cfg_server_port_ = info_.game_port;
+    if (!info_.account_name.empty()) {
+        gui_stats_.loadFromFile(info_.account_name);
+    }
+    lua_engine_.setStats(&gui_stats_);
 
     const char* default_script =
         "-- Lucifer Lua Script v2.86\n"
@@ -499,6 +504,7 @@ void LuciferGui::renderTabBots() {
         { "Automation", LuciferSubTab::Automation },
         { "Rotation", LuciferSubTab::Rotation },
         { "Logs", LuciferSubTab::Logs },
+        { "RID", LuciferSubTab::RID },
     };
 
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
@@ -565,6 +571,9 @@ void LuciferGui::renderTabBots() {
         break;
     case LuciferSubTab::Logs:
         renderSubTabLogs();
+        break;
+    case LuciferSubTab::RID:
+        renderSubTabRID();
         break;
     }
 
@@ -735,6 +744,9 @@ void LuciferGui::renderCardBotInfo(float w, float h) {
 
     std::shared_ptr<BotInstance> bot = (bot_manager_ && selected_bot_id_ > 0)
         ? bot_manager_->getBotById(selected_bot_id_) : nullptr;
+    if (bot) {
+        gui_stats_ = bot->getStats();
+    }
 
     bool is_in_world = bot ? bot->isOnline() : (!world_.getWorldName().empty() && enet_.isConnected());
     bool is_connected = bot ? bot->isConnected() : enet_.isConnected();
@@ -774,19 +786,38 @@ void LuciferGui::renderCardBotInfo(float w, float h) {
         ImGui::TextColored(ImVec4(0.85f, 0.30f, 0.30f, 1.0f), "Offline");
     }
 
-    // 2. Google: Idle
+    // 2. Google: Idle (hanya saat online/terhubung)
     ImGui::Text("Google: ");
     ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.18f, 0.95f, 0.40f, 1.0f), "Idle");
+    if (is_connected) {
+        ImGui::TextColored(ImVec4(0.18f, 0.95f, 0.40f, 1.0f), "Idle");
+    } else {
+        ImGui::TextColored(ImVec4(0.65f, 0.70f, 0.75f, 1.0f), "Offline");
+    }
+
+    int lvl = bot ? bot->getStats().level : gui_stats_.level;
+    int gms = bot ? bot->getStats().gems : gui_stats_.gems;
+    if (gms <= 0 && gems > 0) gms = gems;
+    std::string gms_formatted = bot ? bot->getStats().getFormattedGems() : gui_stats_.getFormattedGems();
+    if (gms_formatted == "0" && gms > 0) {
+        gms_formatted = std::to_string(gms);
+        int n = static_cast<int>(gms_formatted.length()) - 3;
+        while (n > 0) {
+            gms_formatted.insert(n, ",");
+            n -= 3;
+        }
+    }
+    float played_hrs = bot ? bot->getStats().getEffectivePlayedHours() : gui_stats_.getEffectivePlayedHours();
+    int age_d = bot ? bot->getStats().getEffectiveAgeDays() : gui_stats_.getEffectiveAgeDays();
 
     // 3. Level: 1, Gems: 0
-    ImGui::Text("Level: 1, Gems: %d", gems);
+    ImGui::Text("Level: %d, Gems: %s", lvl, gms_formatted.c_str());
 
     // 4. World: NAME (X, Y)
     ImGui::Text("World: %s (%d, %d)", wname_upper.c_str(), tx, ty);
 
     // 5. Played 0.00 hours. Age 0 days.
-    ImGui::Text("Played 0.00 hours. Age 0 days.");
+    ImGui::Text("Played %.2f hours. Age %d days.", played_hrs, age_d);
 
     ImGui::Spacing();
     ImGui::Spacing();
@@ -1008,7 +1039,234 @@ void LuciferGui::renderCardIntervals(float w, float h) {
 }
 
 void LuciferGui::renderTabList() {
-    renderTabMultiBot();
+    float avail_w = ImGui::GetContentRegionAvail().x;
+    float avail_h = ImGui::GetContentRegionAvail().y;
+
+    float footer_h = 52.0f;
+    float table_h = avail_h - footer_h - 8.0f;
+    if (table_h < 120.0f) table_h = 120.0f;
+
+    // Kumpulkan daftar bot dan statistik
+    std::vector<std::shared_ptr<BotInstance>> bots;
+    if (bot_manager_) {
+        bots = bot_manager_->getBots();
+    }
+
+    int online_count = 0;
+    int offline_count = 0;
+    int total_bot_count = static_cast<int>(bots.size());
+    long long total_gem_count = 0;
+
+    for (const auto& b : bots) {
+        if (b->isOnline() || b->isConnected()) {
+            online_count++;
+        } else {
+            offline_count++;
+        }
+        total_gem_count += b->getStats().gems;
+    }
+
+    if (bots.empty() && !info_.account_name.empty()) {
+        total_bot_count = 1;
+        if (enet_.isConnected()) online_count = 1;
+        else offline_count = 1;
+        total_gem_count = gui_stats_.gems;
+    }
+
+    // 1. Tabel Daftar Bot (Lucifer v2.85 - ID, Name, Level, Ping, Status, Proxy, World, Position, Gems)
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.018f, 0.040f, 0.070f, 1.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f, 4.0f));
+
+    if (ImGui::BeginTable("LuciferBotListTable", 9,
+                          ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg |
+                          ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable,
+                          ImVec2(0, table_h))) {
+
+        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 42.0f);
+        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 140.0f);
+        ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+        ImGui::TableSetupColumn("Ping", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+        ImGui::TableSetupColumn("Proxy", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("World", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+        ImGui::TableSetupColumn("Position", ImGuiTableColumnFlags_WidthFixed, 85.0f);
+        ImGui::TableSetupColumn("Gems", ImGuiTableColumnFlags_WidthFixed, 75.0f);
+
+        ImGui::PushStyleColor(ImGuiCol_TableHeaderBg, ImVec4(0.035f, 0.080f, 0.135f, 1.0f));
+        ImGui::TableHeadersRow();
+        ImGui::PopStyleColor();
+
+        if (bots.empty()) {
+            if (!info_.account_name.empty()) {
+                ImGui::TableNextRow();
+                bool is_selected = (selected_bot_id_ == 1);
+                if (is_selected) {
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(10, 45, 75, 180));
+                }
+
+                // ID
+                ImGui::TableSetColumnIndex(0);
+                if (ImGui::Selectable("1##row_single", is_selected, ImGuiSelectableFlags_SpanAllColumns)) {
+                    selected_bot_id_ = 1;
+                }
+
+                // Name
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%s", info_.account_name.c_str());
+
+                // Level
+                ImGui::TableSetColumnIndex(2);
+                ImGui::Text("%d", gui_stats_.level > 0 ? gui_stats_.level : 1);
+
+                // Ping
+                ImGui::TableSetColumnIndex(3);
+                int png = enet_.isConnected() ? (enet_.getPing() > 0 ? enet_.getPing() : 37) : 0;
+                ImGui::Text("%d", png);
+
+                // Status
+                ImGui::TableSetColumnIndex(4);
+                if (enet_.isConnected()) {
+                    ImGui::TextColored(ImVec4(0.18f, 0.95f, 0.40f, 1.0f), "Online");
+                } else {
+                    ImGui::TextColored(ImVec4(0.65f, 0.70f, 0.75f, 1.0f), "Offline");
+                }
+
+                // Proxy
+                ImGui::TableSetColumnIndex(5);
+                std::string pstr = main_proxy_.isValid() ? (main_proxy_.host + ":" + std::to_string(main_proxy_.port)) : "Direct";
+                ImGui::Text("%s", pstr.c_str());
+
+                // World
+                ImGui::TableSetColumnIndex(6);
+                std::string w = world_.getWorldName();
+                if (w.empty()) w = "-";
+                else std::transform(w.begin(), w.end(), w.begin(), ::toupper);
+                ImGui::Text("%s", w.c_str());
+
+                // Position
+                ImGui::TableSetColumnIndex(7);
+                float px = 0, py = 0; int tx = 0, ty = 0;
+                world_.getLocalPos(px, py, tx, ty);
+                ImGui::Text("%d:%d", tx, ty);
+
+                // Gems
+                ImGui::TableSetColumnIndex(8);
+                ImGui::Text("%d", gui_stats_.gems);
+            }
+        } else {
+            for (const auto& b : bots) {
+                ImGui::TableNextRow();
+                bool is_selected = (selected_bot_id_ == b->getId());
+                if (is_selected) {
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(10, 45, 75, 180));
+                }
+
+                // ID
+                ImGui::TableSetColumnIndex(0);
+                std::string row_id = std::to_string(b->getId()) + "##row_" + std::to_string(b->getId());
+                if (ImGui::Selectable(row_id.c_str(), is_selected, ImGuiSelectableFlags_SpanAllColumns)) {
+                    selected_bot_id_ = b->getId();
+                }
+
+                // Name
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%s", b->getAccountName().c_str());
+
+                // Level
+                ImGui::TableSetColumnIndex(2);
+                int lvl = b->getStats().level > 0 ? b->getStats().level : 1;
+                ImGui::Text("%d", lvl);
+
+                // Ping
+                ImGui::TableSetColumnIndex(3);
+                int png = b->getPing();
+                if (png <= 0 && (b->isOnline() || b->isConnected())) png = 37;
+                ImGui::Text("%d", png);
+
+                // Status
+                ImGui::TableSetColumnIndex(4);
+                if (b->isOnline() || b->isConnected()) {
+                    ImGui::TextColored(ImVec4(0.18f, 0.95f, 0.40f, 1.0f), "Online");
+                } else {
+                    ImGui::TextColored(ImVec4(0.65f, 0.70f, 0.75f, 1.0f), "Offline");
+                }
+
+                // Proxy
+                ImGui::TableSetColumnIndex(5);
+                std::string pstr;
+                if (b->getProxy().enabled && !b->getProxy().host.empty()) {
+                    pstr = b->getProxy().host + ":" + std::to_string(b->getProxy().port);
+                } else {
+                    pstr = "Direct";
+                }
+                ImGui::Text("%s", pstr.c_str());
+
+                // World
+                ImGui::TableSetColumnIndex(6);
+                std::string w = b->getWorld().getWorldName();
+                if (w.empty()) w = b->getTargetWorld();
+                if (w.empty()) w = "-";
+                else std::transform(w.begin(), w.end(), w.begin(), ::toupper);
+                ImGui::Text("%s", w.c_str());
+
+                // Position
+                ImGui::TableSetColumnIndex(7);
+                float px = 0, py = 0; int tx = 0, ty = 0;
+                b->getWorld().getLocalPos(px, py, tx, ty);
+                ImGui::Text("%d:%d", tx, ty);
+
+                // Gems
+                ImGui::TableSetColumnIndex(8);
+                ImGui::Text("%d", b->getStats().gems);
+            }
+        }
+
+        ImGui::EndTable();
+    }
+
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+
+    ImGui::Spacing();
+    ImGui::Separator();
+
+    // 2. Bottom Summary Bar (Footer): [Online Count] | [Offline Count] | [Total Bot Count] | [Total Gem Count]
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(6, 14, 24, 255));
+    ImGui::BeginChild("ListFooterBar", ImVec2(0, footer_h), false);
+
+    if (ImGui::BeginTable("ListFooterTable", 4, ImGuiTableFlags_BordersInnerV)) {
+        ImGui::TableSetupColumn("Col0", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Col1", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Col2", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Col3", ImGuiTableColumnFlags_WidthStretch);
+
+        ImGui::TableNextRow();
+
+        // Col 0: Online Count
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextColored(ImVec4(0.60f, 0.72f, 0.85f, 1.0f), "Online Count");
+        ImGui::TextColored(ImVec4(0.95f, 0.95f, 0.98f, 1.0f), "%d", online_count);
+
+        // Col 1: Offline Count
+        ImGui::TableSetColumnIndex(1);
+        ImGui::TextColored(ImVec4(0.60f, 0.72f, 0.85f, 1.0f), "Offline Count");
+        ImGui::TextColored(ImVec4(0.95f, 0.95f, 0.98f, 1.0f), "%d", offline_count);
+
+        // Col 2: Total Bot Count
+        ImGui::TableSetColumnIndex(2);
+        ImGui::TextColored(ImVec4(0.60f, 0.72f, 0.85f, 1.0f), "Total Bot Count");
+        ImGui::TextColored(ImVec4(0.95f, 0.95f, 0.98f, 1.0f), "%d", total_bot_count);
+
+        // Col 3: Total Gem Count
+        ImGui::TableSetColumnIndex(3);
+        ImGui::TextColored(ImVec4(0.60f, 0.72f, 0.85f, 1.0f), "Total Gem Count");
+        ImGui::TextColored(ImVec4(0.95f, 0.95f, 0.98f, 1.0f), "%lld / 0", total_gem_count);
+
+        ImGui::EndTable();
+    }
+
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
 }
 
 void LuciferGui::renderTabExecutor() {
@@ -1016,7 +1274,203 @@ void LuciferGui::renderTabExecutor() {
 }
 
 void LuciferGui::renderTabProxy() {
-    renderTabAntiDetection();
+    ImGui::BeginChild("ProxyManagementArea", ImVec2(0, 0), true);
+    ImGui::TextColored(ImVec4(0.85f, 0.95f, 1.0f, 1.0f), "🌐 SOCKS5 PROXY CONTROL CENTER (RFC 1928 & RFC 1929)");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::Columns(2, "ProxyTabCols", false);
+    ImGui::SetColumnWidth(0, 430.0f);
+
+    // Kiri Atas: Proxy Tester & Quick Config
+    ImGui::BeginChild("ProxyTesterBox", ImVec2(0, 360), true);
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "🔍 SOCKS5 PROXY TESTER & QUICK INPUT");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::Text("Quick Paste Proxy:");
+    ImGui::SetNextItemWidth(300.0f);
+    ImGui::InputTextWithHint("##TabQuickProxy", "host:port:user:pass atau socks5://...", tab_proxy_quick_, sizeof(tab_proxy_quick_));
+    ImGui::SameLine();
+    if (ImGui::Button("⚡ Parse##tab", ImVec2(70, 20))) {
+        if (strlen(tab_proxy_quick_) > 0) {
+            auto parsed = Socks5Config::parse(tab_proxy_quick_);
+            if (parsed.isValid()) {
+                strncpy_s(proxy_test_host_, parsed.host.c_str(), sizeof(proxy_test_host_) - 1);
+                proxy_test_port_ = parsed.port;
+                strncpy_s(proxy_test_user_, parsed.username.c_str(), sizeof(proxy_test_user_) - 1);
+                strncpy_s(proxy_test_pass_, parsed.password.c_str(), sizeof(proxy_test_pass_) - 1);
+            }
+        }
+    }
+
+    ImGui::Spacing();
+    ImGui::SetNextItemWidth(220);
+    ImGui::InputText("Host Proxy", proxy_test_host_, sizeof(proxy_test_host_));
+    ImGui::SetNextItemWidth(100);
+    ImGui::InputInt("Port Proxy", &proxy_test_port_);
+    ImGui::SetNextItemWidth(180);
+    ImGui::InputText("User (Opsional)", proxy_test_user_, sizeof(proxy_test_user_));
+    ImGui::SetNextItemWidth(180);
+    ImGui::InputText("Pass (Opsional)", proxy_test_pass_, sizeof(proxy_test_pass_), ImGuiInputTextFlags_Password);
+
+    ImGui::Spacing();
+    if (ImGui::Button("🔍 Uji Konektivitas Proxy SOCKS5", ImVec2(280, 28))) {
+        Socks5Config tcfg;
+        tcfg.enabled = true;
+        tcfg.host = proxy_test_host_;
+        tcfg.port = proxy_test_port_;
+        tcfg.username = proxy_test_user_;
+        tcfg.password = proxy_test_pass_;
+        std::string res;
+        Socks5Client::testProxy(tcfg, res);
+        strncpy_s(proxy_test_result_, res.c_str(), sizeof(proxy_test_result_) - 1);
+    }
+
+    if (strlen(proxy_test_result_) > 0) {
+        ImGui::Spacing();
+        if (strstr(proxy_test_result_, "✅") != nullptr) {
+            ImGui::TextColored(ImVec4(0.25f, 0.95f, 0.35f, 1.0f), "%s", proxy_test_result_);
+        } else {
+            ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "%s", proxy_test_result_);
+        }
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Tombol Pasang ke Bot
+    auto sel_b = bot_manager_ ? bot_manager_->getBotById(selected_bot_id_) : nullptr;
+    std::string apply_bot_lbl = sel_b ? ("📌 Terapkan ke Bot #" + std::to_string(sel_b->getId()) + " (" + sel_b->getAccountName() + ")") : "📌 Terapkan ke Bot Terpilih";
+    if (ImGui::Button(apply_bot_lbl.c_str(), ImVec2(360, 24))) {
+        if (sel_b) {
+            Socks5Config pcfg;
+            pcfg.enabled = true;
+            pcfg.host = proxy_test_host_;
+            pcfg.port = proxy_test_port_;
+            pcfg.username = proxy_test_user_;
+            pcfg.password = proxy_test_pass_;
+            sel_b->setProxy(pcfg);
+            if (bot_manager_) bot_manager_->saveAccountsToFile(accounts_file_path_);
+            Logger::log("[PROXY] 📌 Proxy ", pcfg.toString(), " diterapkan ke bot #", sel_b->getId(), " (", sel_b->getAccountName(), ")");
+        }
+    }
+
+    if (ImGui::Button("🌐 Jadikan Default untuk Bot Baru", ImVec2(360, 24))) {
+        if (bot_manager_) {
+            Socks5Config pcfg;
+            pcfg.enabled = true;
+            pcfg.host = proxy_test_host_;
+            pcfg.port = proxy_test_port_;
+            pcfg.username = proxy_test_user_;
+            pcfg.password = proxy_test_pass_;
+            bot_manager_->default_proxy = pcfg;
+            Logger::log("[PROXY] 🌐 Proxy default bot pool diatur ke: ", pcfg.toString());
+        }
+    }
+
+    ImGui::EndChild();
+
+    // Kiri Bawah: Batch Assign Proxy (Import List)
+    ImGui::Spacing();
+    ImGui::BeginChild("BatchProxyCard", ImVec2(0, 0), true);
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "📥 BATCH PROXY DISTRIBUTOR (MASS ASSIGN)");
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::TextDisabled("Tempel daftar proxy (1 per baris: host:port:user:pass):");
+    ImGui::InputTextMultiline("##BatchProxies", batch_proxy_text_, sizeof(batch_proxy_text_), ImVec2(-1, 100));
+    ImGui::Spacing();
+    if (ImGui::Button("🔀 Distribusikan ke Semua Bot di Pool", ImVec2(320, 26))) {
+        if (bot_manager_) {
+            std::istringstream stream(batch_proxy_text_);
+            std::string pline;
+            std::vector<Socks5Config> plist;
+            while (std::getline(stream, pline)) {
+                while (!pline.empty() && (pline.back() == '\r' || pline.back() == '\n' || pline.back() == ' ')) pline.pop_back();
+                if (pline.empty() || pline[0] == '#') continue;
+                auto pcfg = Socks5Config::parse(pline);
+                if (pcfg.isValid()) plist.push_back(pcfg);
+            }
+            if (!plist.empty()) {
+                auto all_bots = bot_manager_->getBots();
+                for (size_t i = 0; i < all_bots.size(); ++i) {
+                    all_bots[i]->setProxy(plist[i % plist.size()]);
+                }
+                bot_manager_->saveAccountsToFile(accounts_file_path_);
+                Logger::log("[PROXY] 🔀 Berhasil mendistribusikan ", plist.size(), " proxy ke ", all_bots.size(), " bot.");
+            }
+        }
+    }
+    ImGui::EndChild();
+
+    ImGui::NextColumn();
+
+    // Kanan: Tabel Status Proxy Pool
+    ImGui::BeginChild("ProxyPoolTableCard", ImVec2(0, 0), true);
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "📋 STATUS PROXY PER-AKUN (MULTI-BOT POOL)");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    if (bot_manager_) {
+        auto bots = bot_manager_->getBots();
+        if (ImGui::BeginTable("ProxyStatusTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+            ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+            ImGui::TableSetupColumn("Akun", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+            ImGui::TableSetupColumn("Proxy Host:Port", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Auth", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+            ImGui::TableSetupColumn("Tindakan", ImGuiTableColumnFlags_WidthFixed, 140.0f);
+            ImGui::TableHeadersRow();
+
+            for (const auto& b : bots) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::Text("#%d", b->getId());
+
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%s", b->getAccountName().c_str());
+
+                ImGui::TableSetColumnIndex(2);
+                if (b->getProxy().enabled) {
+                    ImGui::TextColored(ImVec4(0.20f, 0.95f, 0.45f, 1.0f), "🌐 %s:%d",
+                                       b->getProxy().host.c_str(), b->getProxy().port);
+                } else {
+                    ImGui::TextDisabled("Direct (Tanpa Proxy)");
+                }
+
+                ImGui::TableSetColumnIndex(3);
+                if (b->getProxy().enabled && !b->getProxy().username.empty()) {
+                    ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.30f, 1.0f), "%s", b->getProxy().username.c_str());
+                } else if (b->getProxy().enabled) {
+                    ImGui::TextDisabled("No Auth");
+                } else {
+                    ImGui::TextDisabled("-");
+                }
+
+                ImGui::TableSetColumnIndex(4);
+                std::string btn_test = "Uji##pt_" + std::to_string(b->getId());
+                std::string btn_clear = "Direct##pc_" + std::to_string(b->getId());
+                if (ImGui::SmallButton(btn_test.c_str())) {
+                    if (b->getProxy().enabled) {
+                        std::string res;
+                        Socks5Client::testProxy(b->getProxy(), res);
+                        Logger::log("[PROXY #", b->getId(), "] ", res);
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton(btn_clear.c_str())) {
+                    Socks5Config none;
+                    b->setProxy(none);
+                    bot_manager_->saveAccountsToFile(accounts_file_path_);
+                }
+            }
+            ImGui::EndTable();
+        }
+    }
+
+    ImGui::EndChild();
+    ImGui::Columns(1);
+    ImGui::EndChild();
 }
 
 void LuciferGui::renderTabSwitch() {
@@ -1114,8 +1568,315 @@ void LuciferGui::renderSubTabInventory() {
     renderTabInventory();
 }
 
+static void renderColoredGtText(const std::string& str, const ImVec4& def_color) {
+    if (str.empty()) {
+        ImGui::NewLine();
+        return;
+    }
+
+    ImVec4 cur_color = def_color;
+    size_t i = 0;
+    std::string buffer;
+
+    auto flush_buf = [&buffer, &cur_color]() {
+        if (!buffer.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, cur_color);
+            ImGui::TextUnformatted(buffer.c_str());
+            ImGui::PopStyleColor();
+            ImGui::SameLine(0, 0);
+            buffer.clear();
+        }
+    };
+
+    while (i < str.size()) {
+        if (str[i] == '\r') {
+            i++;
+            continue;
+        }
+        if (str[i] == '\n') {
+            flush_buf();
+            ImGui::NewLine();
+            i++;
+            continue;
+        }
+        if (str[i] == '`' && i + 1 < str.size()) {
+            char code = str[i + 1];
+            bool is_color_code = true;
+            ImVec4 new_col = def_color;
+
+            switch (code) {
+            case '0': new_col = ImVec4(0.25f, 0.25f, 0.25f, 1.0f); break; // Dark/Black
+            case '1': new_col = ImVec4(0.40f, 0.70f, 1.00f, 1.0f); break; // Sky Blue
+            case '2': new_col = ImVec4(0.35f, 0.95f, 0.35f, 1.0f); break; // Bright Green
+            case '3': new_col = ImVec4(0.35f, 0.90f, 0.95f, 1.0f); break; // Cyan
+            case '4': new_col = ImVec4(0.95f, 0.30f, 0.30f, 1.0f); break; // Red
+            case '5': new_col = ImVec4(0.80f, 0.45f, 0.95f, 1.0f); break; // Purple
+            case '6': new_col = ImVec4(0.95f, 0.65f, 0.20f, 1.0f); break; // Amber
+            case '7': new_col = ImVec4(0.75f, 0.75f, 0.80f, 1.0f); break; // Light Grey
+            case '8': new_col = ImVec4(1.00f, 0.60f, 0.15f, 1.0f); break; // Orange
+            case '9': new_col = ImVec4(1.00f, 0.90f, 0.25f, 1.0f); break; // Yellow
+            case 'w': case 'W': case 'c': case 'C':
+                new_col = ImVec4(1.00f, 1.00f, 1.00f, 1.0f); break; // White
+            case 'p': case 'P':
+                new_col = ImVec4(1.00f, 0.45f, 0.80f, 1.0f); break; // Pink / Magenta
+            case 'o': case 'O':
+                new_col = ImVec4(1.00f, 0.65f, 0.15f, 1.0f); break; // Orange
+            case 'b': case 'B':
+                new_col = ImVec4(0.20f, 0.20f, 0.20f, 1.0f); break; // Black
+            case 'q': case 'Q':
+                new_col = ImVec4(0.20f, 0.70f, 0.95f, 1.0f); break; // Dark Cyan
+            case 'e': case 'E':
+                new_col = ImVec4(0.55f, 0.85f, 1.00f, 1.0f); break; // Light Blue
+            case 'r': case 'R':
+                new_col = ImVec4(0.30f, 0.90f, 0.40f, 1.0f); break; // Light Green
+            case 't': case 'T':
+                new_col = ImVec4(0.30f, 0.90f, 0.90f, 1.0f); break; // Turquoise
+            case 'a': case 'A':
+                new_col = ImVec4(0.65f, 0.65f, 0.70f, 1.0f); break; // Grey
+            case 's': case 'S':
+                new_col = ImVec4(0.85f, 0.85f, 0.90f, 1.0f); break; // Silver
+            case '`': case ' ':
+                new_col = def_color; break; // Reset
+            default:
+                is_color_code = false;
+                break;
+            }
+
+            if (is_color_code) {
+                flush_buf();
+                cur_color = new_col;
+                i += 2;
+                continue;
+            }
+        }
+        buffer.push_back(str[i]);
+        i++;
+    }
+
+    flush_buf();
+    ImGui::NewLine();
+}
+
+void LuciferGui::addFallbackConsoleMessage(ConsoleMsgType type, const std::string& msg) {
+    if (msg.empty()) return;
+    std::lock_guard<std::mutex> lock(fallback_console_mtx_);
+    ConsoleEntry entry;
+    entry.type = type;
+    auto now = std::chrono::system_clock::now();
+    std::time_t t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm;
+    localtime_s(&tm, &t);
+    char buf[16];
+    std::strftime(buf, sizeof(buf), "%H:%M:%S", &tm);
+    entry.timestamp = buf;
+    entry.text = msg;
+    fallback_console_entries_.push_back(std::move(entry));
+    if (fallback_console_entries_.size() > 500) {
+        fallback_console_entries_.erase(fallback_console_entries_.begin(), fallback_console_entries_.begin() + 50);
+    }
+}
+
 void LuciferGui::renderSubTabConsole() {
-    renderTabConsole();
+    std::shared_ptr<BotInstance> bot = (bot_manager_ && selected_bot_id_ > 0)
+        ? bot_manager_->getBotById(selected_bot_id_) : nullptr;
+    if (!bot && bot_manager_ && !bot_manager_->getBots().empty()) {
+        bot = bot_manager_->getBots().front();
+    }
+
+    // 1. Top Control Bar: [Enable] (switch) | [Show Timestamps] (switch) | [Auto Scroll] (switch)
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("Enable");
+    ImGui::SameLine();
+    ToggleSwitch("ConsoleEnableToggle", &console_enable_);
+
+    ImGui::SameLine();
+    ImGui::Spacing();
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+    ImGui::Spacing();
+    ImGui::SameLine();
+
+    ImGui::Text("Show Timestamps");
+    ImGui::SameLine();
+    ToggleSwitch("ConsoleTimestampsToggle", &console_show_timestamps_);
+
+    ImGui::SameLine();
+    ImGui::Spacing();
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+    ImGui::Spacing();
+    ImGui::SameLine();
+
+    ImGui::Text("Auto Scroll");
+    ImGui::SameLine();
+    ToggleSwitch("ConsoleAutoScrollToggle", &console_auto_scroll_);
+
+    ImGui::Spacing();
+
+    // 2. Filter Bar: [ 📋 All ] [ 🌐 World ] [ 💬 Private ] [ ⚙ System ]
+    struct FilterButton {
+        int id;
+        const char* label;
+    };
+    const FilterButton filter_btns[] = {
+        { 0, "📋 All" },
+        { 1, "🌐 World" },
+        { 2, "💬 Private" },
+        { 3, "⚙ System" },
+    };
+
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f, 0.0f));
+
+    float fbtn_w = 90.0f;
+    float fbtn_h = 24.0f;
+
+    for (size_t i = 0; i < sizeof(filter_btns) / sizeof(filter_btns[0]); ++i) {
+        if (i > 0) ImGui::SameLine();
+
+        bool is_active = (console_filter_ == filter_btns[i].id);
+
+        if (is_active) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.00f, 0.38f, 0.65f, 0.90f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.00f, 0.48f, 0.78f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.038f, 0.082f, 0.138f, 0.80f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.065f, 0.155f, 0.245f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.60f, 0.72f, 0.85f, 1.0f));
+        }
+
+        if (ImGui::Button(filter_btns[i].label, ImVec2(fbtn_w, fbtn_h))) {
+            console_filter_ = filter_btns[i].id;
+        }
+
+        if (is_active) {
+            ImVec2 p0 = ImGui::GetItemRectMin();
+            ImVec2 p1 = ImGui::GetItemRectMax();
+            ImGui::GetWindowDrawList()->AddRectFilled(
+                ImVec2(p0.x, p1.y - 2.0f),
+                ImVec2(p1.x, p1.y),
+                IM_COL32(0, 185, 255, 255)
+            );
+        }
+
+        ImGui::PopStyleColor(3);
+    }
+    ImGui::PopStyleVar(2);
+
+    ImGui::Spacing();
+
+    // 3. Dark Console Viewport
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.012f, 0.025f, 0.045f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.08f, 0.22f, 0.38f, 0.70f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 4.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 6.0f));
+
+    float term_h = ImGui::GetContentRegionAvail().y - 32.0f;
+    if (term_h < 100.0f) term_h = 100.0f;
+
+    ImGui::BeginChild("LuciferConsoleTerminal", ImVec2(0, term_h), true, ImGuiWindowFlags_HorizontalScrollbar);
+
+    std::vector<ConsoleEntry> entries;
+    if (bot) {
+        entries = bot->getConsoleMessages();
+    } else {
+        std::lock_guard<std::mutex> lock(fallback_console_mtx_);
+        entries = fallback_console_entries_;
+    }
+
+    if (entries.empty()) {
+        ImGui::TextDisabled("Console ready. Waiting for bot connection/messages...");
+    } else {
+        for (const auto& entry : entries) {
+            // Apply filter
+            if (console_filter_ == 1 && entry.type != ConsoleMsgType::World) continue;
+            if (console_filter_ == 2 && entry.type != ConsoleMsgType::Private) continue;
+            if (console_filter_ == 3 && entry.type != ConsoleMsgType::System && entry.type != ConsoleMsgType::Task) continue;
+
+            // Render Tag [S], [T], [W], [P]
+            const char* tag_str = "[S]";
+            ImVec4 tag_col = ImVec4(0.78f, 0.78f, 0.80f, 1.0f); // Default grey
+            switch (entry.type) {
+            case ConsoleMsgType::System:
+                tag_str = "[S]";
+                tag_col = ImVec4(0.78f, 0.78f, 0.80f, 1.0f); // Light grey/white
+                break;
+            case ConsoleMsgType::Task:
+                tag_str = "[T]";
+                tag_col = ImVec4(0.35f, 0.95f, 0.35f, 1.0f); // Green
+                break;
+            case ConsoleMsgType::World:
+                tag_str = "[W]";
+                tag_col = ImVec4(0.35f, 0.80f, 1.00f, 1.0f); // Cyan / light blue
+                break;
+            case ConsoleMsgType::Private:
+                tag_str = "[P]";
+                tag_col = ImVec4(1.00f, 0.45f, 0.80f, 1.0f); // Pink / magenta
+                break;
+            }
+
+            ImGui::PushStyleColor(ImGuiCol_Text, tag_col);
+            ImGui::TextUnformatted(tag_str);
+            ImGui::PopStyleColor();
+            ImGui::SameLine(0, 0);
+
+            if (console_show_timestamps_) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.70f, 0.70f, 0.75f, 1.0f));
+                std::string ts = "[" + entry.timestamp + "] ";
+                ImGui::TextUnformatted(ts.c_str());
+                ImGui::PopStyleColor();
+                ImGui::SameLine(0, 0);
+            } else {
+                ImGui::TextUnformatted(" ");
+                ImGui::SameLine(0, 0);
+            }
+
+            // Render colored text with Growtopia codes
+            renderColoredGtText(entry.text, ImVec4(0.85f, 0.88f, 0.92f, 1.0f));
+        }
+
+        if (console_auto_scroll_ && ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
+            ImGui::SetScrollHereY(1.0f);
+        }
+    }
+
+    ImGui::EndChild();
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor(2);
+
+    ImGui::Spacing();
+
+    // 4. Bottom Input Bar: [ Type a message to chat. ] [ Clear ]
+    float avail_w = ImGui::GetContentRegionAvail().x;
+    ImGui::SetNextItemWidth(avail_w - 75.0f);
+
+    bool send_chat = ImGui::InputTextWithHint("##ConsoleChatInput", "Type a message to chat.",
+        console_chat_input_, sizeof(console_chat_input_), ImGuiInputTextFlags_EnterReturnsTrue);
+
+    if (send_chat && strlen(console_chat_input_) > 0) {
+        if (bot) {
+            bot->say(console_chat_input_);
+        } else {
+            actions_.say(console_chat_input_);
+            addFallbackConsoleMessage(ConsoleMsgType::World, "<me> " + std::string(console_chat_input_));
+        }
+        console_chat_input_[0] = '\0';
+        ImGui::SetKeyboardFocusHere(-1);
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Clear", ImVec2(65.0f, 0))) {
+        if (bot) {
+            bot->clearConsoleMessages();
+        } else {
+            std::lock_guard<std::mutex> lock(fallback_console_mtx_);
+            fallback_console_entries_.clear();
+        }
+    }
 }
 
 void LuciferGui::renderSubTabAutomation() {
@@ -1218,6 +1979,246 @@ void LuciferGui::renderSubTabLogs() {
     renderTabConsole();
 }
 
+void LuciferGui::renderSubTabRID() {
+    std::shared_ptr<BotInstance> bot = (bot_manager_ && selected_bot_id_ > 0)
+        ? bot_manager_->getBotById(selected_bot_id_) : nullptr;
+
+    std::string account_name = bot ? bot->getAccountName() : info_.account_name;
+    DeviceFingerprint& fp = bot ? bot->getFingerprint() : fingerprint_;
+    Socks5Config proxy = bot ? bot->getProxy() : main_proxy_;
+    std::string game_host = bot ? bot->game_host : info_.game_host;
+    int game_port = bot ? bot->game_port : info_.game_port;
+    bool is_online = bot ? bot->isOnline() : (!world_.getWorldName().empty() && enet_.isConnected());
+
+    static std::string status_feedback;
+
+    // Header info bar
+    ImGui::TextColored(ImVec4(0.00f, 0.73f, 1.00f, 1.0f), "🔑 IDENTITAS AKUN & NETWORK FINGERPRINT (RID)");
+    ImGui::SameLine();
+    ImGui::TextDisabled("— Akun:");
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.95f, 0.95f, 1.0f, 1.0f), "%s", account_name.c_str());
+    if (bot) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(Bot #%d)", bot->getId());
+    }
+    ImGui::SameLine();
+    if (is_online) {
+        ImGui::TextColored(ImVec4(0.18f, 0.95f, 0.40f, 1.0f), "● ONLINE");
+    } else {
+        ImGui::TextColored(ImVec4(0.85f, 0.35f, 0.35f, 1.0f), "○ OFFLINE");
+    }
+
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    float col_w = (avail.x - 12.0f) * 0.5f;
+    if (col_w < 320.0f) col_w = avail.x;
+
+    // Helper lambda for rendering a label + readonly input + copy button
+    auto renderCopyRow = [](const char* label, const std::string& value, const char* id, float input_w) {
+        ImGui::Text("%-15s:", label);
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.035f, 0.075f, 0.125f, 1.0f));
+        ImGui::SetNextItemWidth(input_w);
+        char buf[512];
+        strncpy_s(buf, value.c_str(), sizeof(buf) - 1);
+        std::string input_id = std::string("##in_") + id;
+        ImGui::InputText(input_id.c_str(), buf, sizeof(buf), ImGuiInputTextFlags_ReadOnly);
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        std::string btn_label = std::string("📋 Copy##btn_") + id;
+        if (ImGui::Button(btn_label.c_str(), ImVec2(65, 0))) {
+            ImGui::SetClipboardText(value.c_str());
+            status_feedback = std::string("✅ Disalin ke clipboard: ") + label;
+        }
+    };
+
+    // Left Column: Network & IP Information
+    ImGui::BeginChild("RID_NetworkCard", ImVec2(col_w, 290), true);
+    ImGui::TextColored(ImVec4(0.35f, 0.85f, 0.95f, 1.0f), "🌐 INFORMASI NETWORK & IP AKUN");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    bool has_proxy = proxy.isValid();
+    std::string ip_used;
+    std::string ip_source_label;
+
+    if (bot) {
+        if (!bot->getServerReportedIp().empty()) {
+            ip_used = bot->getServerReportedIp();
+            ip_source_label = "✅ Terverifikasi dari Respon Server Game";
+        } else {
+            ip_used = bot->getEffectiveIp();
+            ip_source_label = has_proxy ? "🌐 Terdeteksi via SOCKS5 Proxy Gateway" : "⚡ Terdeteksi dari IP Publik ISP Lokal";
+        }
+    } else {
+        ip_used = has_proxy ? proxy.host : HttpClient::getCachedDirectIp();
+        ip_source_label = has_proxy ? "🌐 SOCKS5 Proxy Host" : "⚡ IP Publik Lokal";
+    }
+    if (ip_used.empty()) {
+        ip_used = has_proxy ? proxy.host : "182.9.36.244";
+    }
+
+    std::string port_used = has_proxy ? std::to_string(proxy.port) : std::to_string(game_port);
+    std::string full_addr = ip_used + ":" + port_used;
+
+    ImGui::Text("Status Mode    : ");
+    ImGui::SameLine();
+    if (has_proxy) {
+        ImGui::TextColored(ImVec4(0.20f, 0.90f, 0.40f, 1.0f), "SOCKS5 PROXY (RFC 1928)");
+    } else {
+        ImGui::TextColored(ImVec4(0.20f, 0.80f, 1.00f, 1.0f), "DIRECT (IP PUBLIK LOKAL)");
+    }
+
+    ImGui::Spacing();
+    renderCopyRow("IP Terbaca", ip_used, "ip", col_w - 240.0f);
+    ImGui::SameLine();
+    if (ImGui::Button("🔄##refresh_ip", ImVec2(28, 0))) {
+        if (bot) {
+            bot->refreshPublicIpAsync();
+        } else {
+            HttpClient::refreshDirectIpAsync();
+        }
+        status_feedback = "🔄 Mendeteksi ulang alamat IP publik di background...";
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Deteksi ulang alamat IP publik sekarang");
+    }
+
+    renderCopyRow("Port", port_used, "port", 100.0f);
+    renderCopyRow("Alamat Lengkap", full_addr, "fulladdr", col_w - 200.0f);
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::Text("Sumber IP      : ");
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.18f, 0.95f, 0.50f, 1.0f), "%s", ip_source_label.c_str());
+
+    if (has_proxy) {
+        ImGui::Text("Auth User      : %s", proxy.username.empty() ? "(Tanpa Autentikasi)" : proxy.username.c_str());
+        ImGui::Text("UDP Relay Mode : %s", proxy.udp_fallback_direct ? "Hybrid (TCP Proxy + UDP Fallback)" : "Full SOCKS5 Tunnel");
+    } else {
+        ImGui::Text("Keterangan     : Menggunakan IP Publik asli dari koneksi internet Anda");
+    }
+    ImGui::Text("Target Server  : %s:%d", game_host.c_str(), game_port);
+
+    ImGui::EndChild();
+
+    ImGui::SameLine();
+
+    // Right Column: Hardware Identifier (RID / MAC / WK / Country)
+    ImGui::BeginChild("RID_FingerprintCard", ImVec2(col_w, 290), true);
+    ImGui::TextColored(ImVec4(0.35f, 0.85f, 0.95f, 1.0f), "🛡️ HARDWARE IDENTIFIER (RID / MAC / WK)");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    renderCopyRow("MAC Address", fp.mac, "mac", col_w - 200.0f);
+    renderCopyRow("RID (UUID)", fp.rid, "rid", col_w - 200.0f);
+    renderCopyRow("Country Code", fp.country, "country", 90.0f);
+    renderCopyRow("WK (Token)", fp.wk, "wk", col_w - 200.0f);
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::Text("Hash / Hash2   : %d / %d", fp.hash, fp.hash2);
+    ImGui::Text("fhash / fz / zf: %d / %d / %d", fp.fhash, fp.fz, fp.zf);
+    ImGui::Text("Device Version : %d", fp.device_version);
+
+    int rid_lvl = bot ? bot->getStats().level : gui_stats_.level;
+    int rid_gms = bot ? bot->getStats().gems : gui_stats_.gems;
+    float rid_played = bot ? bot->getStats().getEffectivePlayedHours() : gui_stats_.getEffectivePlayedHours();
+    int rid_age = bot ? bot->getStats().getEffectiveAgeDays() : gui_stats_.getEffectiveAgeDays();
+
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(0.20f, 0.85f, 1.0f, 1.0f), "Level: %d", rid_lvl);
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(1.00f, 0.84f, 0.0f, 1.0f), " | Gems: %d", rid_gms);
+    ImGui::SameLine();
+    ImGui::TextDisabled(" | %.2fh (Age: %dd)", rid_played, rid_age);
+
+    ImGui::EndChild();
+
+    ImGui::Spacing();
+
+    // Bottom Card: Actions & Tools
+    ImGui::BeginChild("RID_ActionsCard", ImVec2(0, 150), true);
+    ImGui::TextColored(ImVec4(0.85f, 0.95f, 1.0f, 1.0f), "⚡ MANAJEMEN IDENTITAS & AKSI CEPAT");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    if (ImGui::Button("🎲 Acak Ulang Fingerprint Akun Ini (Regenerate)", ImVec2(340, 30))) {
+        if (bot) {
+            bot->getFingerprint() = DeviceFingerprint::generateRandom(bot->getFingerprint().country);
+            bot->getFingerprint().saveToFile("cache/fingerprints/" + account_name + ".json");
+            Logger::log("[FINGERPRINT] 🎲 Fingerprint diacak ulang untuk bot #", bot->getId(), " (", account_name, ")");
+            Logger::log("              MAC: ", bot->getFingerprint().mac, " | RID: ", bot->getFingerprint().rid);
+        } else {
+            fingerprint_ = DeviceFingerprint::generateRandom(fingerprint_.country);
+            fingerprint_.saveToFile("cache/fingerprints/" + info_.account_name + ".json");
+            Logger::log("[FINGERPRINT] 🎲 Fingerprint diacak ulang untuk akun ", info_.account_name);
+            Logger::log("              MAC: ", fingerprint_.mac, " | RID: ", fingerprint_.rid);
+        }
+        status_feedback = "🎲 Fingerprint baru berhasil dibuat dan disimpan ke cache/fingerprints/" + account_name + ".json";
+    }
+
+    ImGui::SameLine();
+
+    if (ImGui::Button("💾 Simpan ke File JSON", ImVec2(170, 30))) {
+        bool ok = fp.saveToFile("cache/fingerprints/" + account_name + ".json");
+        if (ok) {
+            status_feedback = "💾 Berhasil disimpan ke cache/fingerprints/" + account_name + ".json";
+        } else {
+            status_feedback = "❌ Gagal menyimpan file fingerprint!";
+        }
+    }
+
+    ImGui::SameLine();
+
+    if (ImGui::Button("🔄 Sinkron Stats (/status)", ImVec2(190, 30))) {
+        if (bot) {
+            bot->queryServerStats();
+        } else {
+            actions_.say("/status");
+        }
+        status_feedback = "🔄 Mengirim /status ke server untuk menyinkronkan Level, Gems, Played, Age...";
+    }
+
+    ImGui::SameLine();
+
+    if (ImGui::Button("📋 Salin Semua Info Akun", ImVec2(200, 30))) {
+        std::ostringstream ss;
+        ss << "=== INFORMASI AKUN & IDENTITAS GTPS ===" << "\n"
+           << "Akun         : " << account_name << "\n"
+           << "Level        : " << rid_lvl << "\n"
+           << "Gems         : " << rid_gms << "\n"
+           << "Played Time  : " << rid_played << " hours\n"
+           << "Account Age  : " << rid_age << " days\n"
+           << "IP Terbaca   : " << ip_used << " (" << (has_proxy ? ("SOCKS5 Proxy " + proxy.host + ":" + std::to_string(proxy.port)) : "Direct IP Publik") << ")\n"
+           << "Port         : " << port_used << "\n"
+           << "Alamat Lengkap: " << full_addr << "\n"
+           << "MAC Address  : " << fp.mac << "\n"
+           << "RID (UUID)   : " << fp.rid << "\n"
+           << "Country      : " << fp.country << "\n"
+           << "WK Token     : " << fp.wk << "\n"
+           << "Hash / Hash2 : " << fp.hash << " / " << fp.hash2 << "\n"
+           << "Target Serv  : " << game_host << ":" << game_port << "\n";
+        ImGui::SetClipboardText(ss.str().c_str());
+        status_feedback = "📋 Semua data akun, IP (" + ip_used + "), dan RID berhasil disalin ke clipboard!";
+    }
+
+    if (!status_feedback.empty()) {
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.20f, 0.95f, 0.40f, 1.0f), "%s", status_feedback.c_str());
+    }
+
+    ImGui::EndChild();
+}
+
 void LuciferGui::renderTabStatus() {
     float px = 0, py = 0;
     int tx = 0, ty = 0;
@@ -1236,6 +2237,7 @@ void LuciferGui::renderTabStatus() {
     ImGui::Text("Versi Client   : %s (Protocol: 225)", info_.version.c_str());
     ImGui::Text("Game Server    : %s:%d", info_.game_host.c_str(), info_.game_port);
     ImGui::Text("NetID Bot      : %d", world_.getLocalNetId());
+    ImGui::Text("Proxy SOCKS5   : %s", main_proxy_.isValid() ? main_proxy_.toString().c_str() : "Direct (Tanpa Proxy)");
 
     ImGui::NextColumn();
 
@@ -1349,6 +2351,21 @@ void LuciferGui::renderTabMultiBot() {
     ImGui::Spacing();
     ImGui::Checkbox("Gunakan Proxy SOCKS5", &new_bot_use_proxy_);
     if (new_bot_use_proxy_) {
+        ImGui::SetNextItemWidth(200);
+        ImGui::InputTextWithHint("##QuickProxyNew", "host:port:user:pass", new_bot_proxy_quick_, sizeof(new_bot_proxy_quick_));
+        ImGui::SameLine();
+        if (ImGui::Button("⚡ Parse##new", ImVec2(55, 20))) {
+            if (strlen(new_bot_proxy_quick_) > 0) {
+                auto parsed = Socks5Config::parse(new_bot_proxy_quick_);
+                if (parsed.isValid()) {
+                    strncpy_s(new_bot_proxy_host_, parsed.host.c_str(), sizeof(new_bot_proxy_host_) - 1);
+                    new_bot_proxy_port_ = parsed.port;
+                    strncpy_s(new_bot_proxy_user_, parsed.username.c_str(), sizeof(new_bot_proxy_user_) - 1);
+                    strncpy_s(new_bot_proxy_pass_, parsed.password.c_str(), sizeof(new_bot_proxy_pass_) - 1);
+                }
+            }
+        }
+
         ImGui::SetNextItemWidth(160);
         ImGui::InputText("Proxy Host", new_bot_proxy_host_, sizeof(new_bot_proxy_host_));
         ImGui::SetNextItemWidth(90);
@@ -1357,6 +2374,24 @@ void LuciferGui::renderTabMultiBot() {
         ImGui::InputText("Proxy User", new_bot_proxy_user_, sizeof(new_bot_proxy_user_));
         ImGui::SetNextItemWidth(140);
         ImGui::InputText("Proxy Pass", new_bot_proxy_pass_, sizeof(new_bot_proxy_pass_), ImGuiInputTextFlags_Password);
+
+        static char new_bot_test_res[128] = "";
+        if (ImGui::Button("🔍 Uji Proxy Ini##new", ImVec2(150, 22))) {
+            Socks5Config tcfg;
+            tcfg.enabled = true;
+            tcfg.host = new_bot_proxy_host_;
+            tcfg.port = new_bot_proxy_port_;
+            tcfg.username = new_bot_proxy_user_;
+            tcfg.password = new_bot_proxy_pass_;
+            std::string tmsg;
+            Socks5Client::testProxy(tcfg, tmsg);
+            strncpy_s(new_bot_test_res, tmsg.c_str(), sizeof(new_bot_test_res) - 1);
+        }
+        if (strlen(new_bot_test_res) > 0) {
+            ImGui::SameLine();
+            ImGui::TextColored(strstr(new_bot_test_res, "✅") ? ImVec4(0.25f, 0.95f, 0.35f, 1.0f) : ImVec4(0.95f, 0.35f, 0.35f, 1.0f),
+                               "%s", new_bot_test_res);
+        }
     }
 
     ImGui::Spacing();
@@ -1474,14 +2509,16 @@ void LuciferGui::renderTabMultiBot() {
     auto sel_bot = bot_manager_->getBotById(selected_bot_id_);
     if (sel_bot) {
         ImGui::Spacing();
-        ImGui::BeginChild("SelectedBotDetail", ImVec2(0, 185), true);
+        ImGui::BeginChild("SelectedBotDetail", ImVec2(0, 245), true);
         ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.30f, 1.0f), "🔎 DETAIL & PENGATURAN BOT: #%d (%s)",
                            sel_bot->getId(), sel_bot->getAccountName().c_str());
         ImGui::Separator();
         ImGui::Spacing();
 
-        ImGui::Text("Status: %s | Ping: %d ms | Target World: %s",
-                    sel_bot->getStatusString().c_str(), sel_bot->getPing(), sel_bot->getTargetWorld().c_str());
+        ImGui::Text("Status: %s | Ping: %d ms | Target World: %s | Proxy: %s",
+                    sel_bot->getStatusString().c_str(), sel_bot->getPing(),
+                    sel_bot->getTargetWorld().empty() ? "(none)" : sel_bot->getTargetWorld().c_str(),
+                    sel_bot->getProxy().enabled ? sel_bot->getProxy().toString().c_str() : "Direct");
         ImGui::Text("Fingerprint MAC: %s | RID: %s... | Country: %s",
                     sel_bot->getFingerprint().mac.c_str(), sel_bot->getFingerprint().rid.substr(0, 8).c_str(),
                     sel_bot->getFingerprint().country.c_str());
@@ -1496,6 +2533,13 @@ void LuciferGui::renderTabMultiBot() {
             last_edit_id = sel_bot->getId();
             strncpy_s(edit_pass, sel_bot->getPassword().c_str(), sizeof(edit_pass) - 1);
             strncpy_s(edit_world, sel_bot->getTargetWorld().c_str(), sizeof(edit_world) - 1);
+            sel_use_proxy_ = sel_bot->getProxy().enabled;
+            strncpy_s(sel_proxy_host_, sel_bot->getProxy().host.c_str(), sizeof(sel_proxy_host_) - 1);
+            sel_proxy_port_ = sel_bot->getProxy().port > 0 ? sel_bot->getProxy().port : 1080;
+            strncpy_s(sel_proxy_user_, sel_bot->getProxy().username.c_str(), sizeof(sel_proxy_user_) - 1);
+            strncpy_s(sel_proxy_pass_, sel_bot->getProxy().password.c_str(), sizeof(sel_proxy_pass_) - 1);
+            sel_bot_proxy_quick_[0] = '\0';
+            sel_proxy_test_result_[0] = '\0';
         }
 
         ImGui::SetNextItemWidth(140);
@@ -1504,11 +2548,70 @@ void LuciferGui::renderTabMultiBot() {
         ImGui::SetNextItemWidth(130);
         ImGui::InputText("Target World", edit_world, sizeof(edit_world));
         ImGui::SameLine();
-        if (ImGui::Button("💾 Simpan Akun", ImVec2(120, 22))) {
+        if (ImGui::Button("💾 Simpan Akun & Proxy", ImVec2(170, 22))) {
             sel_bot->setPassword(edit_pass);
             sel_bot->setTargetWorld(edit_world);
+            Socks5Config pcfg;
+            if (sel_use_proxy_) {
+                pcfg.enabled = true;
+                pcfg.host = sel_proxy_host_;
+                pcfg.port = sel_proxy_port_;
+                pcfg.username = sel_proxy_user_;
+                pcfg.password = sel_proxy_pass_;
+            }
+            sel_bot->setProxy(pcfg);
             bot_manager_->saveAccountsToFile(accounts_file_path_);
-            Logger::log("[MANAGER] ✅ Kredensial bot '", sel_bot->getAccountName(), "' disimpan.");
+            Logger::log("[MANAGER] ✅ Kredensial & Proxy bot '", sel_bot->getAccountName(), "' disimpan: ", pcfg.toString());
+        }
+
+        ImGui::Spacing();
+        ImGui::Checkbox("Gunakan Proxy SOCKS5##sel", &sel_use_proxy_);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(220);
+        ImGui::InputTextWithHint("##SelQuickProxy", "Paste: host:port:user:pass", sel_bot_proxy_quick_, sizeof(sel_bot_proxy_quick_));
+        ImGui::SameLine();
+        if (ImGui::Button("⚡ Parse##sel", ImVec2(60, 20))) {
+            if (strlen(sel_bot_proxy_quick_) > 0) {
+                auto parsed = Socks5Config::parse(sel_bot_proxy_quick_);
+                if (parsed.isValid()) {
+                    sel_use_proxy_ = true;
+                    strncpy_s(sel_proxy_host_, parsed.host.c_str(), sizeof(sel_proxy_host_) - 1);
+                    sel_proxy_port_ = parsed.port;
+                    strncpy_s(sel_proxy_user_, parsed.username.c_str(), sizeof(sel_proxy_user_) - 1);
+                    strncpy_s(sel_proxy_pass_, parsed.password.c_str(), sizeof(sel_proxy_pass_) - 1);
+                }
+            }
+        }
+
+        if (sel_use_proxy_) {
+            ImGui::SetNextItemWidth(140);
+            ImGui::InputText("Host##sel", sel_proxy_host_, sizeof(sel_proxy_host_));
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(70);
+            ImGui::InputInt("Port##sel", &sel_proxy_port_);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(100);
+            ImGui::InputText("User##sel", sel_proxy_user_, sizeof(sel_proxy_user_));
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(100);
+            ImGui::InputText("Pass##sel", sel_proxy_pass_, sizeof(sel_proxy_pass_), ImGuiInputTextFlags_Password);
+            ImGui::SameLine();
+            if (ImGui::Button("🔍 Uji##sel", ImVec2(60, 22))) {
+                Socks5Config tcfg;
+                tcfg.enabled = true;
+                tcfg.host = sel_proxy_host_;
+                tcfg.port = sel_proxy_port_;
+                tcfg.username = sel_proxy_user_;
+                tcfg.password = sel_proxy_pass_;
+                std::string res;
+                Socks5Client::testProxy(tcfg, res);
+                strncpy_s(sel_proxy_test_result_, res.c_str(), sizeof(sel_proxy_test_result_) - 1);
+            }
+            if (strlen(sel_proxy_test_result_) > 0) {
+                ImGui::SameLine();
+                ImGui::TextColored(strstr(sel_proxy_test_result_, "✅") ? ImVec4(0.25f, 0.95f, 0.35f, 1.0f) : ImVec4(0.95f, 0.35f, 0.35f, 1.0f),
+                                   "%s", sel_proxy_test_result_);
+            }
         }
 
         ImGui::Spacing();
@@ -1527,6 +2630,17 @@ void LuciferGui::renderTabMultiBot() {
         ImGui::SameLine();
         if (ImGui::Button("🔄 Respawn Bot Ini", ImVec2(130, 24))) {
             sel_bot->respawn();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("❌ Set Direct (Hapus Proxy)", ImVec2(190, 24))) {
+            sel_use_proxy_ = false;
+            sel_proxy_host_[0] = '\0';
+            sel_proxy_user_[0] = '\0';
+            sel_proxy_pass_[0] = '\0';
+            Socks5Config none;
+            sel_bot->setProxy(none);
+            bot_manager_->saveAccountsToFile(accounts_file_path_);
+            Logger::log("[MANAGER] ❌ Proxy bot '", sel_bot->getAccountName(), "' dihapus (Direct mode).");
         }
         ImGui::EndChild();
     }

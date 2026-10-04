@@ -23,6 +23,7 @@ struct Player {
     float x = 640.0f;
     float y = 736.0f;
     bool is_local = false;
+    int level = 1;
 };
 
 struct DroppedItem {
@@ -58,6 +59,7 @@ public:
     void getLocalPos(float& out_x, float& out_y, int& out_tile_x, int& out_tile_y);
     int getLocalNetId();
     void setLocalNetId(int net_id);
+    int getLocalLevel();
 
     // Getters (Thread-Safe)
     std::string getWorldName();

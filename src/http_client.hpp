@@ -3,6 +3,7 @@
 #include <map>
 #include <vector>
 #include <cstdint>
+#include "socks5.hpp"
 
 struct LoginResponse {
     bool success = false;
@@ -22,7 +23,10 @@ struct LoginResponse {
 
 class HttpClient {
 public:
-    HttpClient(const std::string& base_url, bool use_https);
+    HttpClient(const std::string& base_url, bool use_https, const Socks5Config& proxy = {});
+
+    void setProxy(const Socks5Config& proxy) { proxy_ = proxy; }
+    const Socks5Config& getProxy() const { return proxy_; }
 
     // Login ke GTPS
     LoginResponse login(const std::string& growid,
@@ -35,7 +39,13 @@ public:
                        const std::string& body,
                        const std::map<std::string, std::string>& headers = {});
 
+    // Deteksi IP Publik Aktif (Direct atau via SOCKS5 Proxy)
+    static std::string fetchPublicIp(const Socks5Config& proxy = {}, int timeout_ms = 4000);
+    static std::string getCachedDirectIp();
+    static void refreshDirectIpAsync();
+
 private:
     std::string base_url_;
     bool use_https_;
+    Socks5Config proxy_;
 };
