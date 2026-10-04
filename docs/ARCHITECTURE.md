@@ -210,7 +210,17 @@ Alur eksekusi aplikasi berjalan melalui tahapan terstruktur:
       - Input pencarian: `Search for bots..`
       - Tombol aksi: `[ Load ]`, `[ Save ]`, `[ Add Bot ]`, `[ Remove Bot ]`.
     - **Panel Kanan `[ 🤖 Bots ]` (Sub-Tabs)**:
-      - Sub-tabs: `[ Main ]`, `[ World ]`, `[ Inventory ]`, `[ Console ]`, `[ Automation ]`, `[ Rotation ]`, `[ Logs ]`.
+      - Sub-tabs: `[ Main ]`, `[ Control ]`, `[ World ]`, `[ Inventory ]`, `[ Console ]`, `[ Automation ]`, `[ Rotation ]`, `[ Logs ]`.
+      - **Sub-Tab `[ Control ]` (PC Keyboard & Gamepad Controller)**:
+        - **Left Deck**:
+          - Status bot terpilih, koordinat pixel `(pos_x, pos_y)`, tile `(tx, ty)`, status lantai/lompat, arah hadap.
+          - Virtual Arcade Keycap WASD + Spacebar yang menyala neon dinamis saat tombol fisik keyboard ditekan (`IsKeyDown`).
+          - Tombol aksi: `[ E: Punch ]`, `[ F: Place ]`, `[ Q: Wrench ]`, `[ Enter: Door ]`, `[ C: Collect ]`, `[ R: Respawn ]`.
+          - Quick Hotbar selector item dari tas inventaris untuk pasang blok instan (`Place`).
+        - **Right Viewport**:
+          - Radar mini-map 11x9 grid berpusat pada posisi bot saat ini.
+          - Menampilkan blok solid (Bedrock, Dirt, Granite, Laser), platform kayu, background, item drop (permata), dan avatar bot `[🤖]`.
+          - Interaksi mouse langsung pada grid: Klik Kiri untuk memukul (Hit), Klik Kanan untuk memasang (Place) item terpilih, dan Klik Tengah untuk Wrench.
       - **Grid 2x2 pada Sub-Tab `[ Main ]`**:
         1. **Card `👤 Bot Information` (Kiri Atas)**:
            - Status Online & Ping ms `[37?]`, Google Idle, Level & Gems, World & Posisi Tile `(X, Y)`, Played & Age.
@@ -300,5 +310,190 @@ cache/
    - Dikelola oleh modul singleton [`ItemDatabase`](file:///c:/Users/RIZIQ/Documents/testtt/src/item_database.hpp).
    - **Auto-Download**: Ketika server mengirim paket tank tipe 16 (`PACKET_SEND_ITEM_DATABASE_DATA`), byte mentah langsung disimpan ke `cache/items.dat` dan didekripsi menggunakan sandi cipher Growtopia (`PBGHF892FASDLFDND`).
    - Terintegrasi dengan tab GUI `[ 🗄️ Database ]` untuk live searching ribuan item, waktu panen, rarity, dan hit points.
+
+---
+
+## 8. Sistem Fisika, Deteksi Tabrakan & Gravitasi (Physics & Gravity Engine)
+
+Dalam game Growtopia asli, simulasi fisika 2D (kecepatan jatuh, gravitasi, lompatan, dan tabrakan lantai/platform) dihitung di sisi klien (*client-side physics*). Jika sebuah bot tidak menjalankan simulasi gravitasi, bot akan tampak melayang (*hovering/floating*) di udara pada koordinat spawn pintu putih atau saat berpindah posisi secara horizontal, yang sangat mudah dideteksi oleh moderator (*fly-hack giveaway*).
+
+Sistem fisika **Lucifer GTPS Bot** mengimplementasikan mesin gravitasi presisi berbasis grid tile (32x32 pixel):
+
+### 1. Model Dimensi & Bounding Box Karakter
+- **Dimensi Tile**: 32 x 32 pixel.
+- **Bounding Box Karakter**: Lebar 20 px (`pos_x + 6` s/d `pos_x + 26`), Tinggi 32 px.
+- **Posisi Kaki (*Feet Y*)**: `pos_y + 32.0f`.
+- **Level Berdiri di Atas Tile**: Ketika berdiri di atas baris tile `ty`, koordinat `pos_y = (ty - 1) * 32.0f` dan kaki berada tepat di `ty * 32.0f`.
+
+### 2. Klasifikasi Tabrakan Tile (`WorldState`)
+- **Solid Blocks (`isSolidTile`)**: 
+  - Bedrock (ID 8), Dirt (ID 2), Granite (ID 4), Obsidian, Foreground blocks (`action_type == 14, 16, 28, 30` atau `collision_type == 1`).
+  - Menahan karakter dari segala arah (lantai, dinding, dan atap). Karakter tidak dapat menembus blok solid.
+- **Platforms (`isPlatformTile`)**:
+  - Wooden Platform (ID 18, `action_type == 13` atau `collision_type == 2`).
+  - *One-way jump-through*: Karakter dapat melompat menembus ke atas, namun tertahan jika mendarat/jatuh dari atas. Menekan tombol Down (`dropDown()`) memungkinkan karakter turun melewati platform.
+- **Non-Solid / Passable**:
+  - Udara (`fg == 0`), Background wallpaper (`action_type == 17`), Pintu (`action_type == 2, 12`), Kunci (`action_type == 3`), Bibit/Seeds (`action_type == 18`, ID ganjil).
+
+### 3. Simulasi Gravitasi & Perhitungan Delta Time (`BotActions::updatePhysics`)
+- **Konstanta Gravitasi Alami**: `GRAVITY = 750.0f` px/s², `MAX_FALL_SPEED = 450.0f` px/s.
+- **Alur Per Frame Tick**:
+  1. Mengecek apakah karakter berpijak di atas tanah/platform (`checkGrounded`).
+  2. Jika karakter di udara: akselerasi kecepatan vertikal `velocity_y_ += GRAVITY * dt`.
+  3. Cek sundulan kepala ke langit-langit solid saat melompat (`velocity_y_ < 0`).
+  4. Deteksi benturan lantai solid via `findGroundY(cur_x, cur_y)`.
+  5. Begitu menyentuh permukaan: `velocity_y_ = 0.0f`, posisi `cur_y` diselaraskan ke lantai (`snapToGround`), `flags` diberi bitmask `TankFlags::ON_GROUND (0x20)`, dan paket state konfirmasi dikirim ke server.
+- **Throttled State Streaming (20 Hz / 50ms)**: Saat melayang/jatuh bebas atau di udara saat melompat, paket state dikirim ke server setiap 50ms (sesuai tick rate resmi client Growtopia: 20 Hz) untuk mencegah burst packet rate-limit kicks dari server GTPS.
+- **Kontur Kontinu pada `moveTo`**: Saat bot berpindah tile, ketinggian `step_y` mengikuti kontur lantai tanah sehingga bot tidak melangkah ke udara kosong.
+
+### 4. Perbedaan Paket Lompat Murni vs Terbang / Melayang & Mesin Lompat Aktif
+- **Gotcha Protokol GTPS**: Flag `0x800` (`2048`) sering disalahartikan sebagai "Jumping", padahal dalam game Growtopia flag `0x800` adalah **`TankFlags::WINGS_FLYING`** (terbang menggunakan sayap/jetpack hovering). Jika bot mengirim `0x800`, server dan client pemain lain akan merender bot dalam animasi terbang/melayang.
+- **Lompatan Asli Pemain (Real Player Jump)**:
+  - Karakter pemain melompat **TIDAK PERNAH** mengirim bitmask `0x800`.
+  - Paket state lompat murni hanya mengirim impuls kecepatan vertikal awal (`velocity_y_ = -340.0f` px/s), flag arah hadap (`0x00` untuk kanan, `0x10` untuk kiri), tanpa flag `ON_GROUND (0x20)`. Nilai `-340.0f` menghasilkan tinggi lompatan normal ~2.4 tile dan berada jauh di bawah ambang deteksi high-jump server (`speed_y < -400.0f`).
+- **Active Trajectory Thread**:
+  - Di Growtopia, server tidak menghitung busur parabola pemain secara otomatis jika klien hanya mengirim 1 paket `speed_y`. Klien pemain asli wajib mengirim serangkaian paket posisi `pos_y` yang naik dan turun seiring berjalannya waktu.
+  - Implementasi `BotActions::physicsLoop()` menyimulasikan percepatan gravitasi `GRAVITY = 750.0f` px/s² per 12ms tick dan menyiarkan pembaruan koordinat `pos_y` ke server setiap 50ms.
+  - Saat melompat melalui `jump()`, timestamp paket terakhir `last_state_packet_tp_` disinkronkan seketika agar loop utama tidak mengirim paket duplikat dalam selang < 30ms.
+  - Saat menyentuh lantai, bot mengirim paket konfirmasi pendaratan dengan `speed_y = 0.0f` dan flag `TankFlags::ON_GROUND`.
+
+### 5. Mesin Gerak Real-Time Kontinu Seperti Player Asli (`BotActions::physicsLoop`)
+- **Kendali Berjalan Berkelanjutan (Holding Key to Run)**:
+  - Pada game Growtopia asli di PC/Mobile, pemain **menahan tombol panah** (atau tombol `A` / `D`) untuk terus berlari melintasi dunia, dan karakter berhenti seketika saat tombol dilepas.
+  - Kecepatan berjalan standar pemain Growtopia un-modded adalah **160.0f px/s** (setara 5 tile per detik atau 200ms per tile). Penggunaan kecepatan berlebih (seperti 240 px/s) memicu deteksi speedhack pada anticheat GTPS.
+  - Implementasi menggunakan mesin **`physicsLoop()` kontinu presisi 83 Hz (12ms)**.
+  - Tombol keyboard (`LeftArrow` / `A`, `RightArrow` / `D`) dan tombol D-Pad GUI (`←`, `→`) mendukung pembacaan status ditahan (*held-down state via `IsKeyDown` / `IsItemActive`*):
+    - **Menahan tombol panah kiri / `A` / klik tahan `←`**: Karakter berjalan mulus ke kiri dengan kecepatan alami `160.0f` px/s.
+    - **Menahan tombol panah kanan / `D` / klik tahan `→`**: Karakter berjalan mulus ke kanan dengan kecepatan alami `160.0f` px/s.
+    - **Melepas tombol**: Karakter berhenti seketika, `velocity_x_` menjadi `0.0f`, dan bot mengirimkan 1 paket konfirmasi henti (`speed_x = 0, ON_GROUND`) lalu diam (*idle stand*).
+- **Lompat Sambil Berjalan (Airborne Momentum)**:
+  - Ketika pemain sedang menahan tombol jalan lalu menekan `UpArrow` / `W` / `Space`, karakter melompat ke udara dengan tetap membawa momentum horizontal `160.0f` px/s.
+  - Karakter melayang dalam busur diagonal melompati rintangan/balok di udara dan mendarat kembali ke tanah seperti pemain manusia sungguhan.
+- **Jatuh Alami dari Tebing/Jurang (Cliff Walking)**:
+  - Jika bot berjalan melewati batas tebing/lantai yang berlubang, bot secara otomatis beralih ke status di udara (`on_ground_ = false`) dan ditarik gravitasi jatuh ke bawah sambil tetap mempertahankan momentum jalan ke depan.
+
+### 6. Pencegahan Disconnect Akibat Menabrak Blok (Anti-Noclip & Anti-Kick Collision Protection)
+Ketika pemain menabrak atau menekan tombol ke arah blok solid, server GTPS dapat memutuskan koneksi (*disconnect/kick*) jika mendeteksi pelanggaran noclip atau packet flooding. Modul fisika menerapkan 4 lapisan proteksi:
+1. **Presisi Bounding Box AABB Karakter (`HITBOX_LEFT = 6.0f`, `HITBOX_RIGHT = 25.5f`)**:
+   - Hitbox pemain Growtopia memiliki lebar 19.5 px dan tinggi 28.5 px.
+   - Pengecekan horizontal sebelumnya yang menggunakan toleransi kasar (+22 px) menyebabkan karakter menembus 3–4 pixel ke dalam hitbox blok solid sebelum terdeteksi. Server GTPS mendeteksi *noclip penetration* dan seketika menjatuhkan kick/disconnect.
+   - Sistem kini menguji seluruh rentang AABB sehingga karakter berhenti tepat sebelum menyentuh batas luar blok solid.
+2. **Klem Batas Blok Luar dengan Safe Buffer (0.5px Margin Clamping)**:
+   - Saat bergerak ke kanan dan menabrak blok di `target_tx`, koordinat diklem secara matematis ke `target_tx * 32.0f - 26.0f`. Batas kanan karakter `pos_x + 25.5f` bernilai `target_tx * 32.0f - 0.5f`, sehingga floor division `(pos_x + 25.5f) / 32` menghasilkan `target_tx - 1`. Karakter secara absolut berada di luar blok solid.
+   - Saat bergerak ke kiri dan menabrak blok di `target_tx`, koordinat diklem ke `(target_tx + 1) * 32.0f - 5.5f`. Batas kiri `pos_x + 6.0f` bernilai `(target_tx + 1) * 32.0f + 0.5f` (di dalam `target_tx + 1`).
+3. **Pemeriksaan Vertikal Multi-Titik (Head, Mid-Torso, Feet)**:
+   - Dinding atau rintangan di depan diuji pada tiga ketinggian: kepala (`cur_y + 2.0f`), torso (`cur_y + 16.0f`), dan kaki (`cur_y + 30.5f`).
+   - Mencegah bot menembus blok gantung di atas kepala (*hanging blocks / ceiling tiles*) saat melompat atau berjalan.
+   - Menghapus fitur auto-step instan yang menaikkan posisi Y 32px tanpa lompat, yang sebelumnya memicu deteksi *speedhack/flyhack* pada server anti-cheat.
+4. **Sampling Pijakan Kaki Terisolasi (`checkGrounded` & `findGroundY`)**:
+   - Titik sampling pijakan lantai menggunakan `px + 7.0f` dan `px + 24.5f` (berada di dalam kolom tubuh karakter).
+   - Menghindari kasus di mana bot yang merapat ke dinding samping mendeteksi tile dinding sebagai pijakan lantai dan mengira bot melayang/berdiri di udara.
+5. **Peredaman Paket Jaringan saat Menempel Dinding (*Zero Oscillation & Spam*)**:
+   - Ketika bot terhalang dinding (`blocked == true`), `velocity_x_` disetel ke `0.0f`.
+   - Bot mengirimkan tepat 1 paket idle (`speed_x = 0, speed_y = 0`) saat menyentuh dinding, lalu berhenti menyiarkan paket selama posisi tidak berubah meskipun pemain tetap menahan tombol panah.
+   - Meniadakan lonjakan paket berkecepatan tinggi (*rapid speed toggle oscillation*) yang memicu rate-limit ban server.
+6. **Klem Sundulan Atap / Langit-langit (*Ceiling Anti-Noclip Clamp*)**:
+   - Ketika bot melompat dan kepala membentur atap solid pada baris `head_ty`, koordinat `next_y` diklem ke `(head_ty + 1) * 32.0f + 0.5f`.
+   - Hal ini menjamin posisi `pos_y` secara ketat berada di baris tile udara di bawah atap (`head_ty + 1`), bukan di dalam tile solid `head_ty` (yang sebelumnya terjadi jika dikurangi `HITBOX_TOP` sehingga `pos_y` terdorong 1.5px ke dalam blok solid dan memicu kick noclip seketika dari server GTPS).
+
+### 7. Eliminasi "Mode Fly" & Penegakan Gravitasi Total (*Anti-Fly & Anti-Air-Jump Enforcement*)
+Agar bot tidak berada dalam kondisi *mode fly* (melayang di udara, melompat tanpa batas di langit, atau berjalan di awan tanpa gravitasi), sistem menerapkan 4 proteksi ketat:
+1. **Larangan Mutlak Lompat di Udara (*Strict Single Jump / Anti-Air-Jump*)**:
+   - Pada `BotActions::jump()`, fungsi langsung mengecek `if (!on_ground_) return;`.
+   - Karakter hanya diizinkan melompat jika kakinya menapak di atas tanah padat atau platform. Menekan tombol `W`, `UpArrow`, atau `Space` saat bot sedang di udara tidak akan menghasilkan lompatan tambahan (menghilangkan *air-jump / multi-jump fly hack*).
+2. **Penegakan Gravitasi Tanpa Syarat (*Unconditional Gravity Tick*)**:
+   - Evaluasi gravitasi dan pendeteksian tebing/lantai tidak lagi bergantung pada ketersediaan data tile map (`!tiles_.empty()`). Jika bot berada di udara, gravitasi selalu aktif menarik bot jatuh dengan percepatan alami `750.0f` px/s² menuju lantai dasar dunia (`Y = 1696.0f`).
+   - `checkGrounded` tidak pernah mengembalikan `true` secara sembarangan saat bot berada di ketinggian langit.
+3. **Pindai Signature Adaptif Peta World (`parseMapData`)**:
+   - Parser peta memindai header secara adaptif dengan mencari signature matematis `width * height == tile_count` (contoh: 100 x 60 = 6000 tiles) pada 80 byte pertama payload `PACKET_SEND_MAP_DATA`.
+   - Menghilangkan kegagalan pembacaan map akibat perbedaan versi/offset header server GTPS yang sebelumnya menyebabkan data tile kosong dan membuat bot melayang.
+4. **Isolasi Event `OnSpawn` Karakter Lokal**:
+   - Fungsi `parseSpawn` mengembalikan status `bool is_local`. Prosedur `onSpawned()` dan pengiriman paket inisialisasi state hanya dijalankan saat avatar bot lokal sendiri yang dimuat, mencegah interferensi reset posisi dan spam paket yang dipicu oleh kemunculan pemain lain di dalam world.
+
+### 8. Pencegahan Disconnect pada Tab Control (*Anti-Noclip Platform Drop, Input De-duplication, & Reach Radius Validation*)
+Untuk memastikan kontrol bot menggunakan PC WASD dan mouse pada tab **Control** berjalan mulus tanpa memicu kick/disconnect server:
+1. **Penolakan Mutlak `dropDown()` pada Blok Padat (*Anti-Noclip Platform Guard*)**:
+   - **Akar Masalah**: Pemain PC yang terbiasa dengan WASD secara natural menekan `S` (Down). Sebelumnya, `dropDown()` memindahkan posisi Y secara instan `cur_y + 34.0f` dan langsung mengirim paket state. Jika bot sedang berdiri di atas tanah/bedrock, bot diteleportasikan tepat ke dalam blok padat, menyebabkan anti-cheat GTPS mendeteksi pelanggaran noclip dan memutuskan koneksi secara instan.
+   - **Solusi**: Di Growtopia, pemain asli hanya bisa turun jika berdiri di atas **Platform** (`isPlatformTile`). Jika bot berdiri di atas blok solid (`isSolidTile`), aksi `dropDown()` ditolak sepenuhnya. Jika bot berdiri di atas platform dan bagian bawahnya aman, sistem menyetel `ignore_platform_y_ = foot_ty` dan membiarkan gravitasi menarik karakter turun secara alami tanpa lonjakan koordinat instan.
+2. **Isolasi Navigasi Keyboard ImGui pada On-Screen KeyCap (*De-duplication Protection*)**:
+   - **Akar Masalah**: ImGui secara default memicu tombol yang memiliki fokus saat tombol `Space` atau `Enter` ditekan di keyboard. Hal ini menyebabkan penekanan Space memicu event `key_w_down` (lompat) dan sekaligus mengaktifkan tombol GUI yang sedang aktif, mengirimkan dua paket state lompat dalam selisih 0 milidetik (memicu deteksi rate-limit / air-jump).
+   - **Solusi**: Helper `DrawKeyCap` kini diproteksi dengan `clicked && ImGui::IsItemClicked(ImGuiMouseButton_Left)` sehingga tombol visual arcade hanya terpicu oleh klik fisik mouse, bukan navigasi tombol keyboard.
+3. **Validasi Batas Jangkauan Grid Radar (*Reach Radius Limit / Anti-Long-Punch*)**:
+   - **Akar Masalah**: Viewport radar menampilkan grid 11x9 tile. Klik mouse pada tile di tepi grid (jarak 3–5 tile) sebelumnya langsung mengirimkan paket pukulan/pemasangan (`createTileChange`). Server GTPS mendeteksi interaksi jarak jauh sebagai *Reach Hack / Long Punch* dan mendiskoneksi bot.
+   - **Solusi**: Klik pada grid dibatasi pada radius jangkauan realistis pemain (`dist_x <= 2 && dist_y <= 2`). Tile yang berada di luar jangkauan ditolak untuk pengiriman paket dan diberi tanda peringatan visual pada tooltip.
+4. **Penyempurnaan Deteksi Dinding Kaki (*Safe Feet Horizontal Sampling*)**:
+   - Koordinat vertikal pengujian rintangan kaki pada `physicsLoop` disetel pada `cur_y + 26.0f` (di dalam kolom badan dan di atas garis pijakan lantai) untuk mencegah sampel kaki menyentuh lapisan tanah datar sebagai balok penghalang.
+5. **Pengamanan State Broadcasting Pra-World**:
+   - Thread simulasi fisika memastikan bot telah terhubung penuh ke world dan memiliki `net_id` lokal yang valid sebelum mengevaluasi dan menyiarkan paket posisi.
+
+---
+
+## 9. Audit Mendalam & Perbaikan Arsitektur Movement (Deep Movement Engine Overhaul)
+
+Audit mendalam terhadap pergerakan bot mengidentifikasi 8 akar penyebab desinkronisasi, kick anticheat, dan degradasi performa:
+
+```mermaid
+graph TD
+    Input[Input Gerak: GUI WASD / D-Pad / bot:moveTo / walk] --> PhysicsCore[BotActions::physicsLoop Presisi 83 Hz]
+    PhysicsCore --> SpeedControl[Kecepatan Standar 160 px/s & 180-200ms/Tile]
+    PhysicsCore --> AABBColl[AABB Multi-Titik + Klem Batas Luar 0.5px]
+    PhysicsCore --> GroundCheck[checkGrounded Stabil std::round Toleransi +-5px]
+    PhysicsCore --> WaterCheck{Di Air?}
+    WaterCheck -->|Ya| SwimPhysics[Gravitasi 200 px/s², Max Fall 140, Flag 0x40 SWIMMING]
+    WaterCheck -->|Tidak| LandPhysics[Gravitasi 750 px/s², Max Fall 450, Flag 0x20 ON_GROUND]
+    PhysicsCore --> Streamer[Packet Streamer 20 Hz / 50ms Throttled]
+    Streamer --> ENetOut[ENetClient::send dengan ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT]
+```
+
+### 1. Penyatuan Navigasi `moveTo` ke dalam `physicsLoop` (Anti-Desync & Anti-Speedhack)
+- **Kelemahan Sebelumnya**: `moveTo` membuat thread terpisah (`std::thread(...).detach()`) yang mengirim pembaruan posisi dengan delay `step_delay_ms = 35` (kecepatan ~914 px/s, 5.7x batas normal) dan menulis `setLocalPos()` tanpa penguncian `physics_mtx_`. Akibatnya, thread `moveTo` dan `physicsLoop` saling bertabrakan dan mengirim paket posisi yang melompat maju-mundur (jitter/teleport rubberbanding), memicu kick *Speedhack / Desync* dari server GTPS. Selain itu, `moveTo` lama tidak memiliki pengecekan tabrakan di sepanjang jalur dan menembus blok padat secara noclip.
+- **Arsitektur Baru**:
+  - `moveTo(tile_x, tile_y, step_delay_ms = 180)` kini sepenuhnya mendelegasikan navigasi ke variabel target `target_dest_tx_` di dalam `physicsLoop`.
+  - Bot bergerak dengan kecepatan otentik **160.0f px/s** (200ms per tile), sepenuhnya mematuhi sistem AABB collision dinding, atap, dan gravitasi.
+  - Dilengkapi fitur **auto-hurdle hop**: jika terbentur undakan 1 blok selama > 180ms, bot otomatis melompat untuk melewatinya. Jika dinding lebih tinggi dari 1 blok (rintangan tidak dapat dilewati), bot otomatis membatalkan navigasi dan berhenti dengan aman di depan dinding tanpa noclip.
+  - Meniadakan seluruh race condition multi-threading antar modul.
+
+### 2. Protokol Streaming Paket State Tanpa Reliabilitas (`ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT`)
+- **Kelemahan Sebelumnya**: Fungsi `EnetClient::send` menyetel semua paket dengan flag `ENET_PACKET_FLAG_RELIABLE`. Pada paket posisi berkecepatan 20 Hz (50ms interval), setiap paket menuntut balasan ACK dari server. Apabila terjadi latensi mikro atau server lambat memproses ACK, antrean reliable ENet tersumbat. Retransmisi paket koordinat lama yang tiba terlambat memicu deteksi teleportasi anticheat GTPS.
+- **Arsitektur Baru**:
+  - `EnetClient::send` kini menerima parameter `uint32_t enet_flags`.
+  - Paket pergerakan kontinu (`PACKET_STATE`, tipe 0) disiarkan menggunakan **`ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT`** sesuai standar game multiplayer berkecepatan tinggi. Jika ada 1 paket terlewat di jaringan, paket berikutnya 50ms kemudian langsung memperbarui posisi tanpa penumpukan antrean.
+  - Paket kritis berbasis aksi (`PACKET_TILE_CHANGE_REQUEST`, `PACKET_TILE_ACTIVATE_REQUEST`, `PACKET_ITEM_CHANGE_OBJECT`, chat, warp) tetap dikirim dengan `ENET_PACKET_FLAG_RELIABLE`.
+  - Logging paket posisi frekuensi tinggi dialihkan ke `Logger::logDebug` guna mencegah hitching I/O console Windows yang mengganggu kelancaran polling ENet.
+
+### 3. Pemberantasan Beban Memori Ekstrem via `WorldState::hasTiles()`
+- **Kelemahan Sebelumnya**: Pada setiap tick 12ms (~83 Hz), `physicsLoop` memanggil `!world_.getAllTiles().empty()` sebanyak 2 kali (pada pengecekan dinding dan pengecekan atap). Karena `getAllTiles()` mengembalikan salinan nilai (`std::vector<Tile>`), sistem mengalokasikan dan menyalin 6.000 hingga 20.000 elemen `Tile` sebanyak 166 kali per detik. Ini menyebabkan lonjakan CPU drastis dan mengunci `WorldState::mtx_`, membuat thread ENet kelaparan (*mutex starvation*) hingga ping timeout.
+- **Arsitektur Baru**: Ditambahkan metode ringan `WorldState::hasTiles() const` yang hanya mengembalikan `!tiles_.empty()` di bawah mutex tanpa menyalin vektor.
+
+### 4. Stabilisasi Pijakan Kaki `checkGrounded` dengan `std::round`
+- **Kelemahan Sebelumnya**: Formula `int foot_ty = static_cast<int>(std::floor((feet_y + 1.0f) / 32.0f))` memiliki cacat matematis ketika bot berjalan datar di atas tanah. Presisi floating-point yang berfluktuasi tipis (misal `feet_y = 1726.5f`) menyebabkan `foot_ty` ter-floor ke baris udara di atasnya, sehingga `checkGrounded` bernilai `false` selama 1 frame. Bot sempat beralih ke state jatuh (`velocity_y_ = 50.0f`) lalu mendarat lagi pada tick berikutnya. Flapping status air-ground yang sangat cepat ini dibaca oleh anticheat server sebagai exploit *fly-mode / speedhack*.
+- **Arsitektur Baru**: Menggunakan `int foot_ty = static_cast<int>(std::round(feet_y / 32.0f))` dipadu toleransi absolut `std::abs(feet_y - tile_top) <= 5.0f`. Karakter tetap grounded secara kokoh dan stabil saat berjalan datar tanpa flicker status.
+
+### 5. Fisika Air & Flag `TankFlags::SWIMMING` (0x40)
+- **Fisika Apung Air**: Ditambahkan metode `WorldState::isWaterTile(x, y)` (mendeteksi Water ID 822).
+- Saat avatar bot berada di dalam air:
+  - Percepatan gravitasi diturunkan menjadi `GRAVITY = 200.0f` px/s².
+  - Kecepatan terminal jatuh dibatasi ke `MAX_FALL_SPEED = 140.0f` px/s.
+  - Kecepatan berenang horizontal `120.0f` px/s.
+  - Paket state menambahkan bitmask **`TankFlags::SWIMMING` (0x40)**. Ketiadaan flag ini di air sering memicu deteksi modifikasi client pada server GTPS.
+
+### 6. Sinkronisasi Tile Dinamis Real-Time (`PACKET_TILE_CHANGE_REQUEST` & `PACKET_SEND_TILE_UPDATE_DATA`)
+- Klien kini memproses paket tank tipe 3 dan 5 yang masuk dari server dan memperbarui grid `WorldState::setTile(x, y, fg, bg)`.
+- Ketika bot atau pemain lain memecah atau memasang blok, rintangan fisik di peta langsung terbarui seketika. Mencegah bot menolak berjalan karena mengira blok yang sudah pecah masih solid.
+- Pemanggilan `actions.onSpawned()` seketika saat `PACKET_SEND_MAP_DATA` selesai dimuat memastikan bot langsung selaras dengan tanah world yang baru dimasuki.
+
+### 7. Pencegahan Bot Berlari Abadi saat Tab Beralih
+- Saat pengguna berpindah sub-tab (misal dari Control ke Inventory) atau berpindah top-tab, sistem otomatis memanggil `stopMovement()` dan `cancelNavigation()` agar bot tidak terus berlari menabrak dinding di latar belakang.
+
+### 8. Ekspansi API Lua untuk Gerak Fisik
+- Skrip Lua kini dapat mengontrol pergerakan fisik secara presisi:
+  - `bot:walk(direction, tiles)`: Berjalan teratur dengan timer berbasis token terisolasi (`walk_token_`).
+  - `bot:walkLeft(tiles)` & `bot:walkRight(tiles)`
+  - `bot:jump(power)`: Melompat alami dengan busur parabola.
+  - `bot:dropDown()`: Turun melewati platform kayu.
+  - `bot:moveTo(x, y, [delay])` & `bothaxFindPath`: Otomatis menunggu kedatangan bot (`waitForArrival`) sehingga aksi lanjutan dalam skrip Lua (seperti memukul/memasang) tidak dijalankan secara prematur di luar jangkauan (*anti-reach-hack*).
+
+
+
 
 
