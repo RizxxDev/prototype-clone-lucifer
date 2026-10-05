@@ -569,6 +569,30 @@ Tab **List** (`[ 📋 List ]`) pada Lucifer v2.85 menyajikan tabel ringkasan ter
   - `Total Gem Count`: Akumulasi gems seluruh bot terdaftar dalam format `Total / Target` (misal: `0 / 0`).
 - **Sesuai Permintaan Pengguna**: Tombol batch status dan pembersih proxy non-aktif (`Remove Status`, `Remove Google Status`, `Remove Location Banned Proxies`, `Remove Offline Proxies`) telah dihilangkan sepenuhnya agar antarmuka bersih dan memaksimalkan ruang vertikal tabel.
 
+### 11. Arsitektur Tab Executor Lucifer v2.85 (Script Editor & OnDialogRequest Inspector)
+Tab **Executor** (`[ </> Executor ]`) mereplikasi 100% tata letak visual, fungsi kontrol, dan eksekusi skrip dari Lucifer v2.85:
+- **Top Header Bar**:
+  - Tombol indikator panah bawah `▼` dan tombol label `Selected Bot: <name | none>` yang membuka dropdown modal untuk memilih instance bot target.
+  - Tombol aksi kanan:
+    1. `[ Dialog ]`: Membuka modal pop-up `OnDialogRequest Inspector` untuk memeriksa string dialog mentah yang diterima bot terpilih dari server game GTPS lengkap dengan fitur penyalinan ke clipboard (`Copy Raw Dialog`).
+    2. `[ Switch ]`: Beralih siklis (*cycle switch*) ke instance bot berikutnya dalam antrean.
+    3. `[ Next ]`: Memilih instance bot selanjutnya secara berurutan dan memperbarui status aktif.
+- **Viewport Editor & Line Number Gutter (ImGuiColorTextEdit)**:
+  - Mengintegrasikan mesin editor kode profesional berkinerja tinggi berbasis `TextEditor` dengan palet warna khusus tema gelap Lucifer (`#030810`).
+  - **Syntax Highlighting Penuh**: Pewarnaan sintaksis Lua secara real-time untuk *Keywords* (`local`, `for`, `in`, `do`, `end`, `if`, `then`, dll. - oranye/amber), *Strings* (hijau), *Numbers* (cyan terang), *Identifiers* (putih lembut), dan pengenal bawaan API bot Lucifer (`addBot`, `getBot`, `bot`, `world`, `log`, `sleep`, dll. - biru neon).
+  - **Nomor Baris Kode**: Gutter nomor baris vertikal bawaan di sebelah kiri (`1`, `2`, `3`, ...) dengan pelacakan baris aktif (*active line highlight*) dan batas pemisah yang rapi.
+  - **Default Kosong**: Sesuai preferensi pengguna, saat aplikasi pertama kali dibuka atau tombol `New` / `Delete` ditekan, buffer editor secara default dalam keadaan kosong (`empty/blank`).
+- **Bottom Control Toolbar (7 Tombol Interaktif)**:
+  1. `[ ▶ Run ]`: Mengambil kode langsung dari `text_editor_->GetText()` dan mengeksekusinya di background worker thread `LuaEngine`.
+  2. `[ ■ Stop ]`: Menghentikan eksekusi skrip yang sedang aktif.
+  3. `[ 📁 Save ]`: Menyimpan skrip editor ke berkas persisten `cache/scripts/executor.lua`.
+  4. `[ 📁 New ]`: Mengatur ulang buffer editor ke keadaan kosong (`blank/new`).
+  5. `[ 🗑 Delete ]`: Membersihkan seluruh buffer teks di editor skrip (`SetText("")`).
+  6. `[ 🔍 View Error ]`: Membuka modal log galat eksekusi skrip Lua (`getLastError()`) dengan tombol salin log.
+  7. `[ 🗔 WinConsole ]`: Beralih menampilkan atau menyembunyikan jendela native console Windows (`::ShowWindow(::GetConsoleWindow(), SW_SHOW / SW_HIDE)`).
+- **Integrasi Lua Engine C API (`addBot`)**:
+  - `LuaEngine` mengekspos fungsi global `addBot(info)` yang menerima tabel kamus konfigurasi bot (`display`, `secret`, `name`, `mac`, `rid`, `wk`, `world`, dll.) dan secara otomatis mendaftarkan serta mengonfigurasi instance bot baru ke dalam `BotManager`.
+
 
 
 

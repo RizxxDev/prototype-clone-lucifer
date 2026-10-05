@@ -191,6 +191,7 @@ int main(int argc, char** argv) {
         AntiDetection::init();
         DeviceFingerprint fingerprint = DeviceFingerprint::getOrCreateForAccount(acc_name.empty() ? "default" : acc_name);
         ReconnectController reconnect_ctrl(2000, 2.0f, 30000, 0.15f);
+        std::string single_last_dialog;
 
         auto build_handshake = [&](const std::string& meta_str, int user_id = 0, int token = 0, const std::string& door_id = "", int lmode = -1) -> std::string {
             std::string hs;
@@ -533,6 +534,7 @@ int main(int argc, char** argv) {
                         else if (fn.find("OnDialogRequest") != std::string::npos) {
                             if (vars.size() > 1) {
                                 std::string dmsg = vars[1].str_val;
+                                single_last_dialog = dmsg;
                                 if (single_stats.parseFromText(dmsg)) {
                                     if (!acc_name.empty()) single_stats.saveToFile(acc_name);
                                     Logger::log("[+] 📊 Stats diperbarui dari OnDialogRequest: Level=", single_stats.level,
@@ -737,6 +739,7 @@ int main(int argc, char** argv) {
                        fingerprint, reconnect_ctrl, do_reconnect);
         gui.setMainProxy(main_proxy);
         gui.getStats() = single_stats;
+        gui.setFallbackLastDialog(single_last_dialog);
 
         // Inisialisasi Multi-Bot Manager & Thread Pool
         BotManager bot_manager(4);
@@ -779,6 +782,7 @@ int main(int argc, char** argv) {
         }
 
         gui.setBotManager(&bot_manager);
+        lua_engine.setBotManager(&bot_manager);
 
         Logger::log("\n========================================================");
         Logger::log("  🔥 Membuka Antarmuka GUI Lucifer (Dear ImGui DX11)...");

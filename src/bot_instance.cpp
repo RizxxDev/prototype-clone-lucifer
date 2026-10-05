@@ -653,6 +653,7 @@ void BotInstance::setupPacketHandlers() {
                     else if (fn.find("OnDialogRequest") != std::string::npos) {
                         if (vars.size() > 1) {
                             std::string dmsg = vars[1].str_val;
+                            setLastDialog(dmsg);
                             std::string clean_dmsg = Logger::stripColorCodes(dmsg);
                             if (stats_.parseFromText(dmsg)) {
                                 stats_.saveToFile(account_name_);

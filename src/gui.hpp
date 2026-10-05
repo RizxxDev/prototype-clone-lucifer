@@ -26,6 +26,7 @@ struct BotInfo;
 struct DeviceFingerprint;
 class ReconnectController;
 class BotManager;
+class TextEditor;
 
 // ============================================================
 // Lucifer Native Desktop GUI (Dear ImGui + DirectX 11 + Win32)
@@ -50,11 +51,12 @@ public:
     void shutdown();
 
     // Bot Manager Setter
-    void setBotManager(BotManager* mgr) { bot_manager_ = mgr; }
+    void setBotManager(BotManager* mgr);
 
     BotStats& getStats() { return gui_stats_; }
     const BotStats& getStats() const { return gui_stats_; }
     void addFallbackConsoleMessage(ConsoleMsgType type, const std::string& msg);
+    void setFallbackLastDialog(const std::string& d) { fallback_last_dialog_ = d; }
 
     enum class LuciferTopTab {
         Bots = 0,
@@ -189,8 +191,14 @@ public:
     char proxy_test_pass_[64] = "";
     char proxy_test_result_[256] = "";
 
-    // Script Editor Buffers
+    // Script Editor Buffers (Lucifer v2.85 Executor)
     char script_buffer_[16384]{};
+    std::unique_ptr<TextEditor> text_editor_;
+    bool show_dialog_modal_ = false;
+    bool show_error_modal_ = false;
+    bool win_console_visible_ = true;
+    char executor_status_msg_[128] = "";
+    std::string fallback_last_dialog_;
 
     // Console & Log Buffers
     char log_filter_[128] = "";

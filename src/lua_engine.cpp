@@ -6,6 +6,8 @@
 #include "packet.hpp"
 #include "logger.hpp"
 #include "bot_stats.hpp"
+#include "bot_manager.hpp"
+#include "bot_instance.hpp"
 
 extern "C" {
 #include <lua.h>
@@ -563,6 +565,8 @@ void LuaEngine::registerLuciferApi(lua_State* L) {
     lua_setglobal(L, "getBot");
     lua_pushcfunction(L, luaGetBots);
     lua_setglobal(L, "getBots");
+    lua_pushcfunction(L, luaAddBot);
+    lua_setglobal(L, "addBot");
 
     lua_newtable(L); // bot table
     lua_pushcfunction(L, botSay);
@@ -1860,6 +1864,84 @@ void LuaEngine::triggerOnInput(int key) {
 // ============================================================
 // Lucifer Bot Metatable Methods (Backward Compatibility)
 // ============================================================
+int LuaEngine::luaAddBot(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
+    LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+    if (!self) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    std::string name, pass, target_world;
+    std::string mac, rid, wk;
+    Socks5Config proxy{};
+
+    if (lua_istable(L, 1)) {
+        lua_getfield(L, 1, "name");
+        if (lua_isstring(L, -1)) name = lua_tostring(L, -1);
+        lua_pop(L, 1);
+
+        lua_getfield(L, 1, "display");
+        if (lua_isstring(L, -1) && name.empty()) name = lua_tostring(L, -1);
+        lua_pop(L, 1);
+
+        lua_getfield(L, 1, "user");
+        if (lua_isstring(L, -1) && name.empty()) name = lua_tostring(L, -1);
+        lua_pop(L, 1);
+
+        lua_getfield(L, 1, "secret");
+        if (lua_isstring(L, -1)) pass = lua_tostring(L, -1);
+        lua_pop(L, 1);
+
+        lua_getfield(L, 1, "pass");
+        if (lua_isstring(L, -1) && pass.empty()) pass = lua_tostring(L, -1);
+        lua_pop(L, 1);
+
+        lua_getfield(L, 1, "mac");
+        if (lua_isstring(L, -1)) mac = lua_tostring(L, -1);
+        lua_pop(L, 1);
+
+        lua_getfield(L, 1, "rid");
+        if (lua_isstring(L, -1)) rid = lua_tostring(L, -1);
+        lua_pop(L, 1);
+
+        lua_getfield(L, 1, "wk");
+        if (lua_isstring(L, -1)) wk = lua_tostring(L, -1);
+        lua_pop(L, 1);
+
+        lua_getfield(L, 1, "world");
+        if (lua_isstring(L, -1)) target_world = lua_tostring(L, -1);
+        lua_pop(L, 1);
+    } else if (lua_isstring(L, 1)) {
+        name = lua_tostring(L, 1);
+        if (lua_isstring(L, 2)) pass = lua_tostring(L, 2);
+        if (lua_isstring(L, 3)) target_world = lua_tostring(L, 3);
+    }
+
+    if (name.empty()) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    if (self->bot_manager_) {
+        auto b = self->bot_manager_->addBot(name, pass, target_world, proxy);
+        if (b) {
+            if (!mac.empty()) b->getFingerprint().mac = mac;
+            if (!rid.empty()) b->getFingerprint().rid = rid;
+            if (!wk.empty()) b->getFingerprint().wk = wk;
+            Logger::log("[LUA] ✅ addBot sukses: #", b->getId(), " (", name, ")");
+            lua_getglobal(L, "bot");
+            return 1;
+        }
+    } else {
+        Logger::log("[LUA] ⚠️ addBot: bot_manager_ belum di-set, bot name: ", name);
+    }
+
+    lua_getglobal(L, "bot");
+    return 1;
+}
+
 int LuaEngine::luaGetBot(lua_State* L) {
     lua_getglobal(L, "bot");
     return 1;

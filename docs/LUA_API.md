@@ -251,3 +251,28 @@ for _, p in ipairs(proxy_list) do
 end
 ```
 
+### Contoh 5: Menambahkan Bot Massal via `addBot(info)` (Template Lucifer v2.85)
+```lua
+local list_surat = [[
+over_0000000000000000@
+over_0000000000000000@
+over_0000000000000000@
+]]
+
+for line in string.gmatch(list_surat, "([^\r\n]+)") do
+    local email, token, mac, rid, wk = line:match("([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)")
+    if email and token and mac and rid and wk then
+        local info = {
+            display = email,
+            secret = email,
+            name = token,
+            mac = mac,
+            rid = rid,
+            wk = wk,
+            platform = 0,
+        }
+        local bot = addBot(info)
+    end
+end
+```
+

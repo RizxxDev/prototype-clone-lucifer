@@ -84,6 +84,16 @@ public:
     std::vector<ConsoleEntry> getConsoleMessages() const;
     void clearConsoleMessages();
 
+    // Dialog Inspector (Lucifer v2.85)
+    std::string getLastDialog() const {
+        std::lock_guard<std::mutex> lk(dialog_mtx_);
+        return last_dialog_;
+    }
+    void setLastDialog(const std::string& d) {
+        std::lock_guard<std::mutex> lk(dialog_mtx_);
+        last_dialog_ = d;
+    }
+
     // Konfigurasi Server
     std::string login_url = "http://127.0.0.1/growtopia/server_data.php";
     bool use_https = false;
@@ -139,4 +149,7 @@ private:
 
     mutable std::mutex console_mtx_;
     std::vector<ConsoleEntry> console_entries_;
+
+    mutable std::mutex dialog_mtx_;
+    std::string last_dialog_;
 };

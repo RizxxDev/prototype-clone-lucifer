@@ -16,6 +16,7 @@ class EnetClient;
 struct Variant;
 struct GameUpdatePacket;
 struct BotStats;
+class BotManager;
 
 // ============================================================
 // Bothax & Lucifer Lua Scripting Engine
@@ -56,6 +57,8 @@ public:
     Socks5Config getProxy() const;
     void setProxy(const Socks5Config& p);
     void setStats(BotStats* stats) { stats_ = stats; }
+    void setBotManager(BotManager* bm) { bot_manager_ = bm; }
+    BotManager* getBotManager() const { return bot_manager_; }
 
 private:
     void workerThread(std::string code);
@@ -135,6 +138,7 @@ private:
     static int luaSetProxy(lua_State* L);
     static int luaGetProxy(lua_State* L);
     static int luaTestProxy(lua_State* L);
+    static int luaAddBot(lua_State* L);
 
     // Internal Structure Helpers
     static void pushNetAvatar(lua_State* L, const std::string& name, int netid, int userid,
@@ -146,6 +150,7 @@ private:
     WorldState& world_;
     EnetClient& enet_;
     BotStats* stats_{nullptr};
+    BotManager* bot_manager_{nullptr};
 
     std::function<Socks5Config()> get_proxy_fn_;
     std::function<void(const Socks5Config&)> set_proxy_fn_;

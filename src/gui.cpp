@@ -14,13 +14,17 @@
 #include "http_client.hpp"
 
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
+#include "TextEditor.h"
 
 #include <dwmapi.h>
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
+#include <fstream>
+#include <filesystem>
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
@@ -69,25 +73,50 @@ LuciferGui::LuciferGui(EnetClient& enet, WorldState& world, BotActions& actions,
     }
     lua_engine_.setStats(&gui_stats_);
 
-    const char* default_script =
-        "-- Lucifer Lua Script v2.86\n"
-        "-- Tekan tombol [Jalankan Script] di atas untuk mengeksekusi\n\n"
-        "log(\"🚀 Lucifer Lua Script dimulai!\")\n"
-        "local world = bot:getWorld()\n"
-        "log(\"Nama World: \" .. world.name .. \" (\" .. world.width .. \"x\" .. world.height .. \")\")\n\n"
-        "local me = bot:getLocal()\n"
-        "log(\"Posisi Bot: Tile (\" .. me.tile_x .. \", \" .. me.tile_y .. \")\")\n\n"
-        "-- Contoh: Bergerak dengan bot\n"
-        "bot:moveTo(me.tile_x + 1, me.tile_y, 40)\n"
-        "sleep(300)\n"
-        "bot:moveTo(me.tile_x, me.tile_y, 40)\n"
-        "log(\"✅ Script selesai!\")\n";
-    strncpy_s(script_buffer_, default_script, sizeof(script_buffer_) - 1);
+    text_editor_ = std::make_unique<TextEditor>();
+    auto lang = TextEditor::LanguageDefinition::Lua();
+    static const char* const custom_identifiers[] = {
+        "addBot", "getBot", "getBots", "bot", "world", "log", "sleep",
+        "GetLocal", "GetWorld", "GetInventory", "GetTiles", "GetTile",
+        "GetObjectList", "GetPlayerList", "GetPlayer", "MakeRequest",
+        "AddHook", "RemoveHook", "RemoveHooks", "SendPacket", "SendPacketRaw",
+        "SendVariantList", "FindPath", "CheckPath", "LogToConsole"
+    };
+    for (const auto& id_name : custom_identifiers) {
+        TextEditor::Identifier id;
+        id.mDeclaration = std::string("Lucifer API: ") + id_name;
+        lang.mIdentifiers.insert(std::make_pair(std::string(id_name), id));
+    }
+    text_editor_->SetLanguageDefinition(lang);
+
+    TextEditor::Palette pal = TextEditor::GetDarkPalette();
+    pal[(size_t)TextEditor::PaletteIndex::Background] = 0xff100803; // Dark navy #030810
+    pal[(size_t)TextEditor::PaletteIndex::Cursor] = 0xffffff00; // Cyan cursor
+    pal[(size_t)TextEditor::PaletteIndex::Selection] = 0x80905000; // Translucent blue
+    pal[(size_t)TextEditor::PaletteIndex::LineNumber] = 0xff7a5838; // Soft slate blue #38587a
+    pal[(size_t)TextEditor::PaletteIndex::CurrentLineFill] = 0x20301a08; // Subtle line highlight
+    pal[(size_t)TextEditor::PaletteIndex::CurrentLineEdge] = 0x40603510;
+    pal[(size_t)TextEditor::PaletteIndex::Keyword] = 0xffd69c56; // Vibrant orange/amber
+    pal[(size_t)TextEditor::PaletteIndex::String] = 0xff70c070; // Soft green
+    pal[(size_t)TextEditor::PaletteIndex::Number] = 0xff80e0e0; // Bright cyan
+    pal[(size_t)TextEditor::PaletteIndex::Identifier] = 0xffe2e8f0; // Clean off-white
+    pal[(size_t)TextEditor::PaletteIndex::KnownIdentifier] = 0xff60b0ff; // Neon sky blue
+    pal[(size_t)TextEditor::PaletteIndex::Punctuation] = 0xffb0c0d0;
+    text_editor_->SetPalette(pal);
+
+    // Default kosong sesuai instruksi pengguna
+    script_buffer_[0] = '\0';
+    text_editor_->SetText("");
 }
 
 LuciferGui::~LuciferGui() {
     shutdown();
     g_current_gui = nullptr;
+}
+
+void LuciferGui::setBotManager(BotManager* mgr) {
+    bot_manager_ = mgr;
+    lua_engine_.setBotManager(mgr);
 }
 
 bool LuciferGui::createDeviceD3D(HWND hWnd) {
@@ -1270,7 +1299,323 @@ void LuciferGui::renderTabList() {
 }
 
 void LuciferGui::renderTabExecutor() {
-    renderTabScriptEditor();
+    float avail_w = ImGui::GetContentRegionAvail().x;
+    float avail_h = ImGui::GetContentRegionAvail().y;
+
+    float top_bar_h = 28.0f;
+    float bottom_bar_h = 32.0f;
+    float editor_h = avail_h - top_bar_h - bottom_bar_h - 14.0f;
+    if (editor_h < 120.0f) editor_h = 120.0f;
+
+    // Kumpulkan bot yang tersedia
+    std::shared_ptr<BotInstance> current_bot = nullptr;
+    std::vector<std::shared_ptr<BotInstance>> bots;
+    if (bot_manager_) {
+        bots = bot_manager_->getBots();
+        if (selected_bot_id_ > 0) {
+            current_bot = bot_manager_->getBotById(selected_bot_id_);
+        }
+        if (!current_bot && !bots.empty()) {
+            current_bot = bots[0];
+            selected_bot_id_ = current_bot->getId();
+        }
+    }
+
+    // =========================================================================
+    // 1. TOP HEADER BAR: [▼] Selected Bot: <name|none>      [Dialog] [Switch] [Next]
+    // =========================================================================
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.015f, 0.035f, 0.060f, 0.0f));
+    ImGui::BeginChild("ExecutorTopBarArea", ImVec2(0, top_bar_h), false);
+
+    // Dropdown arrow indicator / button
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.02f, 0.06f, 0.12f, 0.6f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.05f, 0.15f, 0.28f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.65f, 0.82f, 1.0f, 1.0f));
+    if (ImGui::Button("▼##ExecArrowBtn", ImVec2(24, 22))) {
+        ImGui::OpenPopup("ExecBotSelectMenu");
+    }
+    ImGui::PopStyleColor(3);
+
+    ImGui::SameLine(0, 8.0f);
+
+    std::string bot_label = "Selected Bot: none";
+    if (current_bot) {
+        bot_label = "Selected Bot: " + current_bot->getAccountName();
+    } else if (!info_.account_name.empty()) {
+        bot_label = "Selected Bot: " + info_.account_name;
+    }
+
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.04f, 0.10f, 0.20f, 0.5f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.93f, 1.0f, 1.0f));
+    if (ImGui::Button(bot_label.c_str(), ImVec2(0, 22))) {
+        ImGui::OpenPopup("ExecBotSelectMenu");
+    }
+    ImGui::PopStyleColor(3);
+
+    if (ImGui::BeginPopup("ExecBotSelectMenu")) {
+        ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f), "Choose Target Bot:");
+        ImGui::Separator();
+        if (ImGui::Selectable("none", selected_bot_id_ == 0)) {
+            selected_bot_id_ = 0;
+        }
+        for (const auto& b : bots) {
+            char item_name[128];
+            snprintf(item_name, sizeof(item_name), "#%d %s (%s)",
+                     b->getId(), b->getAccountName().c_str(),
+                     b->isOnline() ? "Online" : "Offline");
+            if (ImGui::Selectable(item_name, selected_bot_id_ == b->getId())) {
+                selected_bot_id_ = b->getId();
+            }
+        }
+        if (bots.empty() && !info_.account_name.empty()) {
+            char item_name[128];
+            snprintf(item_name, sizeof(item_name), "#1 %s (Single)", info_.account_name.c_str());
+            if (ImGui::Selectable(item_name, selected_bot_id_ == 1)) {
+                selected_bot_id_ = 1;
+            }
+        }
+        ImGui::EndPopup();
+    }
+
+    // Right Action Buttons: [ Dialog ] [ Switch ] [ Next ]
+    float btn_w = 64.0f;
+    float btn_h = 22.0f;
+    float right_group_w = (btn_w * 3) + (6.0f * 2);
+    ImGui::SameLine(avail_w - right_group_w - 4.0f);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.04f, 0.10f, 0.18f, 0.85f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.08f, 0.20f, 0.35f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.28f, 0.50f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.93f, 1.0f, 1.0f));
+
+    if (ImGui::Button("Dialog", ImVec2(btn_w, btn_h))) {
+        show_dialog_modal_ = true;
+    }
+    ImGui::SameLine(0, 6.0f);
+    if (ImGui::Button("Switch", ImVec2(btn_w, btn_h))) {
+        if (!bots.empty()) {
+            int cur_idx = -1;
+            for (size_t i = 0; i < bots.size(); ++i) {
+                if (bots[i]->getId() == selected_bot_id_) {
+                    cur_idx = (int)i;
+                    break;
+                }
+            }
+            int next_idx = (cur_idx + 1) % bots.size();
+            selected_bot_id_ = bots[next_idx]->getId();
+            snprintf(executor_status_msg_, sizeof(executor_status_msg_),
+                     "Switched to #%d %s", bots[next_idx]->getId(), bots[next_idx]->getAccountName().c_str());
+        }
+    }
+    ImGui::SameLine(0, 6.0f);
+    if (ImGui::Button("Next", ImVec2(btn_w, btn_h))) {
+        if (!bots.empty()) {
+            int cur_idx = -1;
+            for (size_t i = 0; i < bots.size(); ++i) {
+                if (bots[i]->getId() == selected_bot_id_) {
+                    cur_idx = (int)i;
+                    break;
+                }
+            }
+            int next_idx = (cur_idx + 1) % bots.size();
+            selected_bot_id_ = bots[next_idx]->getId();
+            snprintf(executor_status_msg_, sizeof(executor_status_msg_),
+                     "Selected #%d %s", bots[next_idx]->getId(), bots[next_idx]->getAccountName().c_str());
+        }
+    }
+
+    ImGui::PopStyleColor(4);
+    ImGui::PopStyleVar();
+
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+
+    // =========================================================================
+    // 2. CENTRAL CODE EDITOR AREA (Syntax Highlighted, Line Numbers, Lucifer Theme)
+    // =========================================================================
+    if (text_editor_) {
+        text_editor_->Render("ExecutorCodeEditor", ImVec2(avail_w, editor_h), true);
+    } else {
+        ImGui::BeginChild("ExecutorEditorContainer", ImVec2(0, editor_h), true);
+        ImGui::InputTextMultiline("##exec_code", script_buffer_, sizeof(script_buffer_),
+                                  ImVec2(-1.0f, -1.0f), ImGuiInputTextFlags_AllowTabInput);
+        ImGui::EndChild();
+    }
+
+    ImGui::Spacing();
+
+    // =========================================================================
+    // 3. BOTTOM CONTROL BAR: [▶ Run] [■ Stop] [📁 Save] [📁 New] [🗑 Delete] [🔍 View Error] [🗔 WinConsole]
+    // =========================================================================
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 0.0f));
+
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.030f, 0.080f, 0.145f, 0.90f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.060f, 0.160f, 0.280f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.090f, 0.240f, 0.420f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.08f, 0.20f, 0.35f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.93f, 1.0f, 1.0f));
+
+    float bbtn_h = 28.0f;
+
+    if (ImGui::Button("▶ Run", ImVec2(0, bbtn_h))) {
+        std::string code = text_editor_ ? text_editor_->GetText() : script_buffer_;
+        if (lua_engine_.runScript(code)) {
+            strncpy_s(executor_status_msg_, "Script started successfully", sizeof(executor_status_msg_) - 1);
+        } else {
+            strncpy_s(executor_status_msg_, "Already running or failed", sizeof(executor_status_msg_) - 1);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("■ Stop", ImVec2(0, bbtn_h))) {
+        lua_engine_.stopScript();
+        strncpy_s(executor_status_msg_, "Script stopped", sizeof(executor_status_msg_) - 1);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("📁 Save", ImVec2(0, bbtn_h))) {
+        std::string code = text_editor_ ? text_editor_->GetText() : script_buffer_;
+        std::error_code ec;
+        std::filesystem::create_directories("cache/scripts", ec);
+        std::ofstream out("cache/scripts/executor.lua");
+        if (out) {
+            out << code;
+            strncpy_s(executor_status_msg_, "Saved to cache/scripts/executor.lua", sizeof(executor_status_msg_) - 1);
+        } else {
+            strncpy_s(executor_status_msg_, "Failed to save file", sizeof(executor_status_msg_) - 1);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("📁 New", ImVec2(0, bbtn_h))) {
+        if (text_editor_) text_editor_->SetText("");
+        script_buffer_[0] = '\0';
+        strncpy_s(executor_status_msg_, "New empty script buffer", sizeof(executor_status_msg_) - 1);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("🗑 Delete", ImVec2(0, bbtn_h))) {
+        if (text_editor_) text_editor_->SetText("");
+        script_buffer_[0] = '\0';
+        strncpy_s(executor_status_msg_, "Buffer cleared", sizeof(executor_status_msg_) - 1);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("🔍 View Error", ImVec2(0, bbtn_h))) {
+        show_error_modal_ = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("🗔 WinConsole", ImVec2(0, bbtn_h))) {
+#ifdef _WIN32
+        HWND hCon = ::GetConsoleWindow();
+        if (hCon) {
+            win_console_visible_ = !win_console_visible_;
+            ::ShowWindow(hCon, win_console_visible_ ? SW_SHOW : SW_HIDE);
+            snprintf(executor_status_msg_, sizeof(executor_status_msg_),
+                     "WinConsole: %s", win_console_visible_ ? "Visible" : "Hidden");
+        }
+#endif
+    }
+
+    // Right-aligned status indicators
+    if (lua_engine_.isRunning()) {
+        float elapsed = lua_engine_.getExecutionTimeMs() / 1000.0f;
+        char status_txt[64];
+        snprintf(status_txt, sizeof(status_txt), "● Running (%.1fs)", elapsed);
+        float sw = ImGui::CalcTextSize(status_txt).x;
+        ImGui::SameLine(avail_w - sw - 4.0f);
+        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.4f, 1.0f), "%s", status_txt);
+    } else if (executor_status_msg_[0] != '\0') {
+        float sw = ImGui::CalcTextSize(executor_status_msg_).x;
+        if (avail_w - sw - 4.0f > ImGui::GetCursorPosX()) {
+            ImGui::SameLine(avail_w - sw - 4.0f);
+        } else {
+            ImGui::SameLine();
+        }
+        ImGui::TextColored(ImVec4(0.5f, 0.75f, 0.95f, 1.0f), "%s", executor_status_msg_);
+    }
+
+    ImGui::PopStyleColor(5);
+    ImGui::PopStyleVar(3);
+
+    // =========================================================================
+    // 4. POPUP MODALS: OnDialogRequest Inspector & Lua Error Log
+    // =========================================================================
+    if (show_dialog_modal_) {
+        ImGui::OpenPopup("OnDialogRequest Inspector##DialogModal");
+    }
+    if (ImGui::BeginPopupModal("OnDialogRequest Inspector##DialogModal", &show_dialog_modal_, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextColored(ImVec4(0.0f, 0.75f, 1.0f, 1.0f), "🔍 OnDialogRequest Inspector (GTPS Protocol)");
+        ImGui::Separator();
+
+        std::string current_dialog = "";
+        std::string bname = "None";
+        if (current_bot) {
+            bname = current_bot->getAccountName();
+            current_dialog = current_bot->getLastDialog();
+        } else {
+            bname = info_.account_name.empty() ? "Local Bot" : info_.account_name;
+            current_dialog = fallback_last_dialog_;
+        }
+
+        ImGui::Text("Active Target Bot: %s", bname.c_str());
+
+        if (current_dialog.empty()) {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "No dialog packet received yet from game server.");
+        } else {
+            ImGui::BeginChild("DialogBoxScroll", ImVec2(520, 240), true);
+            ImGui::PushTextWrapPos(500.0f);
+            ImGui::TextUnformatted(current_dialog.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::EndChild();
+        }
+
+        ImGui::Spacing();
+        if (!current_dialog.empty()) {
+            if (ImGui::Button("📋 Copy Raw Dialog", ImVec2(150, 0))) {
+                ImGui::SetClipboardText(current_dialog.c_str());
+            }
+            ImGui::SameLine();
+        }
+
+        if (ImGui::Button("Tutup##CloseDialogModal", ImVec2(100, 0))) {
+            show_dialog_modal_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (show_error_modal_) {
+        ImGui::OpenPopup("Lua Execution Error Log##ErrorModal");
+    }
+    if (ImGui::BeginPopupModal("Lua Execution Error Log##ErrorModal", &show_error_modal_, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "❌ Lua Script Engine Error");
+        ImGui::Separator();
+
+        std::string err = lua_engine_.getLastError();
+        if (err.empty()) {
+            ImGui::TextColored(ImVec4(0.2f, 0.85f, 0.3f, 1.0f), "✅ No errors reported. Lua engine is clean.");
+        } else {
+            ImGui::BeginChild("ErrorBoxScroll", ImVec2(520, 180), true);
+            ImGui::PushTextWrapPos(500.0f);
+            ImGui::TextColored(ImVec4(0.95f, 0.4f, 0.4f, 1.0f), "%s", err.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::EndChild();
+        }
+
+        ImGui::Spacing();
+        if (!err.empty()) {
+            if (ImGui::Button("📋 Copy Error", ImVec2(120, 0))) {
+                ImGui::SetClipboardText(err.c_str());
+            }
+            ImGui::SameLine();
+        }
+
+        if (ImGui::Button("Tutup##CloseErrorModal", ImVec2(100, 0))) {
+            show_error_modal_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 }
 
 void LuciferGui::renderTabProxy() {
