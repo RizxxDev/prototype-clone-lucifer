@@ -25,6 +25,81 @@
 #include "item_database.hpp"
 #include <filesystem>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <tlhelp32.h>
+
+static BOOL CALLBACK TerminateOldInstanceWindowProc(HWND hwnd, LPARAM lParam) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == static_cast<DWORD>(lParam)) {
+        PostMessage(hwnd, WM_CLOSE, 0, 0);
+    }
+    return TRUE;
+}
+
+static void terminatePreviousInstances() {
+    DWORD current_pid = GetCurrentProcessId();
+    char current_path[MAX_PATH] = {0};
+    if (GetModuleFileNameA(NULL, current_path, MAX_PATH) == 0) {
+        return;
+    }
+    std::string current_exe_name = std::filesystem::path(current_path).filename().string();
+    if (current_exe_name.empty()) return;
+
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return;
+
+    PROCESSENTRY32 pe;
+    pe.dwSize = sizeof(PROCESSENTRY32);
+
+    std::vector<DWORD> pids_to_kill;
+
+    if (Process32First(snapshot, &pe)) {
+        do {
+            if (pe.th32ProcessID != current_pid && pe.th32ProcessID != 0) {
+                if (_stricmp(pe.szExeFile, current_exe_name.c_str()) == 0) {
+                    pids_to_kill.push_back(pe.th32ProcessID);
+                }
+            }
+        } while (Process32Next(snapshot, &pe));
+    }
+    CloseHandle(snapshot);
+
+    for (DWORD pid : pids_to_kill) {
+        HANDLE hProc = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
+        if (hProc) {
+            char other_path[MAX_PATH] = {0};
+            DWORD size = MAX_PATH;
+            bool is_same_app = true;
+            if (QueryFullProcessImageNameA(hProc, 0, other_path, &size)) {
+                if (_stricmp(other_path, current_path) != 0) {
+                    is_same_app = false;
+                }
+            }
+
+            if (is_same_app) {
+                Logger::log("[SYSTEM] ⚠️ Menemukan instance lama berjalan (PID: ", pid, "). Menghentikan instance lama...");
+                // Kirim pesan WM_CLOSE ke window GUI instance lama
+                EnumWindows(TerminateOldInstanceWindowProc, static_cast<LPARAM>(pid));
+
+                // Tunggu sejenak agar instance lama dapat shutdown secara wajar
+                if (WaitForSingleObject(hProc, 400) != WAIT_OBJECT_0) {
+                    // Paksa terminate jika instance lama tidak merespons (misal stuck / headless)
+                    TerminateProcess(hProc, 0);
+                    WaitForSingleObject(hProc, 1000);
+                }
+                Logger::log("[SYSTEM] ✅ Instance lama (PID: ", pid, ") berhasil di-terminate.");
+            }
+            CloseHandle(hProc);
+        }
+    }
+}
+#endif
+
 using json = nlohmann::json;
 
 static std::atomic<bool> g_running{true};
@@ -40,6 +115,49 @@ int main(int argc, char** argv) {
     std::cout << "========================================\n";
     std::cout << "  GTPS Lucifer Bot - Core Suite & CLI\n";
     std::cout << "========================================\n\n";
+
+    // ---- Check for --eval-lua cli argument ----
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--eval-lua" && i + 1 < argc) {
+            std::string code = argv[i + 1];
+            ItemDatabase::instance().loadFromFile("cache/items.dat");
+            if (!ItemDatabase::instance().isLoaded()) {
+                ItemDatabase::instance().loadFromFile("items.dat");
+            }
+            EnetClient dummy_enet;
+            WorldState dummy_world;
+            BotActions dummy_actions(dummy_enet, dummy_world);
+            LuaEngine test_engine(dummy_actions, dummy_world, dummy_enet);
+            std::cout << "[LUA TEST RUNNER] Menjalankan skrip...\n";
+            test_engine.runScript(code);
+            while (test_engine.isRunning()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            std::string err = test_engine.getLastError();
+            if (!err.empty()) {
+                std::cerr << "[LUA TEST ERROR] " << err << "\n";
+                return 1;
+            }
+            std::cout << "[LUA TEST SUCCESS]\n";
+            return 0;
+        }
+    }
+
+    // ---- Auto-terminate previous running instance if started again ----
+    bool allow_multiple = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--allow-multiple") {
+            allow_multiple = true;
+            break;
+        }
+    }
+
+    if (!allow_multiple) {
+#ifdef _WIN32
+        terminatePreviousInstances();
+#endif
+    }
 
     // ---- Load config (.env prioritized, fallback to JSON) ----
     std::string cfg_path = (argc > 1) ? argv[1] : "";
@@ -176,6 +294,9 @@ int main(int argc, char** argv) {
         std::filesystem::create_directories("cache/fingerprints");
     } catch (...) {}
     ItemDatabase::instance().loadFromFile("cache/items.dat");
+    if (!ItemDatabase::instance().isLoaded()) {
+        ItemDatabase::instance().loadFromFile("items.dat");
+    }
 
     // ---- Fase 1b & 2: ENet Connect & Lucifer State Engine ----
     Logger::log("\n--- FASE 1b & 2: ENet Connect & Lucifer State Engine ---");

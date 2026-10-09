@@ -6,6 +6,7 @@
 #include <memory>
 #include <chrono>
 #include <mutex>
+#include <functional>
 
 class EnetClient;
 class WorldState;
@@ -26,6 +27,24 @@ public:
     void wrenchPlayer(int net_id);
     void enter();
 
+    // Offsets Emulation (RequestTileChange & HandleTouch)
+    void requestTileChange(int tile_x, int tile_y, uint16_t item_id);
+    void handleTouch(float x, float y, uint16_t item_id = 0);
+
+    // Feature Flags & Config (Offsets Emulation: ModFly, NoName, etc.)
+    void setModFly(bool enable);
+    bool isModFly() const;
+    void setNoName(bool enable);
+    bool isNoName() const;
+    void setSpeed(int speed_delay_ms);
+    int  getSpeed() const;
+    void setPunchRange(int range);
+    int  getPunchRange() const;
+    void setBuildRange(int range);
+    int  getBuildRange() const;
+    void setItemSelected(uint16_t item_id);
+    uint16_t getItemSelected() const;
+
     // Inventory & Item Interaction
     void collect(int object_uid = -1);
     int  collectNearby(float radius_tiles = 4.0f);
@@ -39,12 +58,24 @@ public:
 
     // Low level
     void sendTankPacket(const struct GameUpdatePacket& pkt, const uint8_t* extra = nullptr, size_t extra_len = 0);
+    void setOnSendTankPacketHook(std::function<bool(const struct GameUpdatePacket&)> hook) {
+        on_send_tank_hook_ = hook;
+    }
 
 private:
     EnetClient& enet_;
     WorldState& world_;
     std::mutex say_mtx_;
     std::chrono::steady_clock::time_point last_say_time_{};
+
+    // Flags
+    std::atomic<bool> mod_fly_{false};
+    std::atomic<bool> no_name_{false};
+    std::atomic<int> speed_delay_{35};
+    std::atomic<int> punch_range_{3};
+    std::atomic<int> build_range_{3};
+    std::atomic<uint16_t> selected_item_{18}; // default 18 (Fist)
+    std::function<bool(const struct GameUpdatePacket&)> on_send_tank_hook_{nullptr};
 };
 
 class AutoFarmController {

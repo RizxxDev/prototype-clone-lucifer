@@ -73,32 +73,33 @@ void ItemDatabase::loadBuiltinFallback() {
         int grow;
         int rarity;
         int hits;
+        uint8_t collision;
     };
 
     static const BuiltinDef defaults[] = {
-        { 2, "Dirt", "Foreground", 31, 1, 3 },
-        { 3, "Dirt Seed", "Seed", 31, 1, 0 },
-        { 4, "Granite", "Foreground", 100, 2, 4 },
-        { 5, "Granite Seed", "Seed", 100, 2, 0 },
-        { 8, "Bedrock", "Bedrock", 0, 999, 0 },
-        { 10, "Rock Background", "Background", 45, 1, 2 },
-        { 11, "Rock Background Seed", "Seed", 45, 1, 0 },
-        { 18, "Wooden Platform", "Platform", 60, 2, 2 },
-        { 19, "Wooden Platform Seed", "Seed", 60, 2, 0 },
-        { 26, "Door", "Door", 120, 2, 3 },
-        { 27, "Door Seed", "Seed", 120, 2, 0 },
-        { 32, "Sign", "Sign", 150, 3, 3 },
-        { 98, "Pickaxe", "Clothing", 0, 25, 0 },
-        { 242, "World Lock", "Lock", 0, 100, 0 },
-        { 456, "Laser Grid", "Foreground", 345600, 48, 6 },
-        { 457, "Laser Grid Seed", "Seed", 345600, 48, 0 },
-        { 5666, "Pepper Tree", "Foreground", 259200, 40, 5 },
-        { 5667, "Pepper Tree Seed", "Seed", 259200, 40, 0 },
-        { 8270, "Chand", "Foreground", 604800, 75, 7 },
-        { 8271, "Chand Seed", "Seed", 604800, 75, 0 },
-        { 5640, "Magplant 5000", "Storage / Magplant", 0, 999, 0 },
-        { 9556, "Rayman's Fist", "Clothing", 0, 999, 0 },
-        { 1796, "Diamond Lock", "Lock", 0, 100, 0 }
+        { 2, "Dirt", "Foreground", 31, 1, 3, 1 },
+        { 3, "Dirt Seed", "Seed", 31, 1, 0, 0 },
+        { 4, "Granite", "Foreground", 100, 2, 4, 1 },
+        { 5, "Granite Seed", "Seed", 100, 2, 0, 0 },
+        { 8, "Bedrock", "Bedrock", 0, 999, 0, 1 },
+        { 10, "Rock Background", "Background", 45, 1, 2, 0 },
+        { 11, "Rock Background Seed", "Seed", 45, 1, 0, 0 },
+        { 18, "Wooden Platform", "Platform", 60, 2, 2, 2 },
+        { 19, "Wooden Platform Seed", "Seed", 60, 2, 0, 0 },
+        { 26, "Door", "Door", 120, 2, 3, 3 },
+        { 27, "Door Seed", "Seed", 120, 2, 0, 0 },
+        { 32, "Sign", "Sign", 150, 3, 3, 0 },
+        { 98, "Pickaxe", "Clothing", 0, 25, 0, 0 },
+        { 242, "World Lock", "Lock", 0, 100, 0, 1 },
+        { 456, "Laser Grid", "Foreground", 345600, 48, 6, 1 },
+        { 457, "Laser Grid Seed", "Seed", 345600, 48, 0, 0 },
+        { 5666, "Pepper Tree", "Foreground", 259200, 40, 5, 1 },
+        { 5667, "Pepper Tree Seed", "Seed", 259200, 40, 0, 0 },
+        { 8270, "Chand", "Foreground", 604800, 75, 7, 1 },
+        { 8271, "Chand Seed", "Seed", 604800, 75, 0, 0 },
+        { 5640, "Magplant 5000", "Storage / Magplant", 0, 999, 0, 1 },
+        { 9556, "Rayman's Fist", "Clothing", 0, 999, 0, 0 },
+        { 1796, "Diamond Lock", "Lock", 0, 100, 0, 1 }
     };
 
     for (const auto& d : defaults) {
@@ -109,6 +110,7 @@ void ItemDatabase::loadBuiltinFallback() {
         itm.grow_time = d.grow;
         itm.rarity = d.rarity;
         itm.break_hits = d.hits;
+        itm.collision_type = d.collision;
         id_to_index_[itm.id] = items_.size();
         items_.push_back(itm);
     }
@@ -239,6 +241,7 @@ bool ItemDatabase::parseBinary(const uint8_t* data, size_t size) {
         if (!read8(tex_x) || !read8(tex_y) || !read8(spread) ||
             !read8(stripey) || !read8(collision) || !read8(break_hits)) break;
 
+        itm.collision_type = collision;
         itm.break_hits = break_hits / 6; // Growtopia format (hits = value / 6)
 
         uint32_t drop_chance = 0;
@@ -349,4 +352,28 @@ bool ItemDatabase::isLoaded() const {
 std::string ItemDatabase::getLoadedPath() const {
     std::lock_guard<std::mutex> lock(mtx_);
     return loaded_path_;
+}
+
+bool ItemDatabase::isCollidable(int id) const {
+    if (id <= 0) return false;
+    const ItemInfo* info = getItem(id);
+    if (!info) {
+        // Fallback untuk id umum jika database belum termuat
+        return (id == 8 || id == 2 || id == 4 || id == 242);
+    }
+    // Solid block (collision_type == 1), bedrock (action 14), atau block non-passable
+    if (info->collision_type == 1 || info->action_type == 14) return true;
+    if (info->collision_type != 0 && info->collision_type != 2 && info->collision_type != 3 && info->action_type == 16) {
+        return true;
+    }
+    return false;
+}
+
+bool ItemDatabase::isDoor(int id) const {
+    if (id <= 0) return false;
+    const ItemInfo* info = getItem(id);
+    if (!info) {
+        return (id == 6 || id == 12 || id == 26);
+    }
+    return (info->action_type == 2 || info->action_type == 12 || info->collision_type == 3);
 }

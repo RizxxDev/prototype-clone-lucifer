@@ -18,6 +18,7 @@ struct ItemInfo {
     int break_hits = 0;
     uint8_t action_type = 0;
     uint8_t clothing_type = 0;
+    uint8_t collision_type = 0;
 };
 
 class ItemDatabase {
@@ -37,6 +38,10 @@ public:
     size_t getItemCount() const;
     bool isLoaded() const;
     std::string getLoadedPath() const;
+
+    // Helper Collision & Door (Offsets Emulation)
+    bool isCollidable(int id) const;
+    bool isDoor(int id) const;
 
 private:
     ItemDatabase();

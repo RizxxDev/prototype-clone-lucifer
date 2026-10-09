@@ -263,11 +263,13 @@ Aplikasi menggunakan model thread terdistribusi:
 | **AutoFarm Worker Thread** | Loop placing, hitting, and collecting blok per-bot | `std::atomic<bool> running_`, sleep ber-jitter |
 | **Movement Interpolator Threads** | Pergerakan multi-tile halus di background agar tidak memblokir render frame GUI | Thread detach dengan interval `step_delay_ms` |
 | **CLI Input Thread (Fallback Mode)** | Membaca input terminal stdin saat berjalan tanpa DirectX 11 | `std::getline` pada worker thread terpisah |
+| **Lua Worker & Hook Dispatcher** | Menjalankan skrip Lua terisolasi, background polling hook liveness, timer `RunDelayed`, dan variadic thread `RunThread` | `std::recursive_mutex lua_mtx_`, `std::atomic<int> hook_count_` |
 
 ### Prinsip Keamanan Thread (Thread Safety)
 1. **Tidak Ada Deadlock Callback**: Callback `EnetClient::onPacket`, `onConnect`, dan `onDisconnect` selalu menyalin delegat ke variabel lokal sebelum memanggilnya di luar *lock mutex*.
 2. **Atomic States**: State kritis seperti `g_running`, `in_world_`, `handshake_sent_`, `auto_warped_`, `redirecting_` menggunakan `std::atomic<bool>`.
 3. **World Snapshot Isolation**: Fungsi pembacaan world seperti `world.getTiles()` atau `world.getPlayers()` mengembalikan salinan data dengan proteksi mutex yang singkat.
+4. **Single-Instance Auto-Termination**: Saat aplikasi diluncurkan ulang, fungsi `terminatePreviousInstances()` di `src/main.cpp` secara otomatis mendeteksi dan menterminasi instance proses lama (`CreateToolhelp32Snapshot`, `WM_CLOSE`, `TerminateProcess`), mencegah konflik socket ENet, proxy reuse collision, dan double-windowing DirectX 11. Flag `--allow-multiple` tersedia jika pengguna membutuhkan multi-instance secara eksplisit.
 
 ---
 

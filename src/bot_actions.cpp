@@ -13,6 +13,9 @@ BotActions::BotActions(EnetClient& enet, WorldState& world)
 
 void BotActions::sendTankPacket(const GameUpdatePacket& pkt, const uint8_t* extra, size_t extra_len) {
     if (!enet_.isConnected()) return;
+    if (on_send_tank_hook_ && on_send_tank_hook_(pkt)) {
+        return;
+    }
     auto bytes = TankPacketHelper::serialize(pkt, extra, extra_len);
     enet_.send(GtPacket::NET_MESSAGE_GAME_PACKET, bytes);
 }
@@ -36,31 +39,34 @@ void BotActions::moveTo(int tile_x, int tile_y, int step_delay_ms) {
     int net_id = world_.getLocalNetId();
     if (net_id < 0) net_id = -1;
 
-    if (steps <= 1 || step_delay_ms <= 0) {
-        uint32_t flags = TankFlags::ON_GROUND;
+    int delay = (step_delay_ms > 0) ? step_delay_ms : speed_delay_.load();
+
+    if (steps <= 1 || delay <= 0) {
+        uint32_t flags = mod_fly_.load() ? TankFlags::FLYING : TankFlags::ON_GROUND;
         if (target_x < cur_x) flags |= TankFlags::FACING_LEFT;
         auto pkt = TankPacketHelper::createState(net_id, target_x, target_y, flags);
         sendTankPacket(pkt);
         world_.setLocalPos(target_x, target_y);
         Logger::log("[ACTION] 🚶 Bergerak ke tile (", tile_x, ", ", tile_y, ") [Pixel: ", target_x, ", ", target_y, "]");
     } else {
+        bool flying = mod_fly_.load();
         // Multi-langkah (misal step 2, 3, 5): jalankan di background thread agar TIDAK memblokir ENet poll / GUI
-        std::thread([this, cur_x, cur_y, target_x, target_y, tile_x, tile_y, steps, step_delay_ms, net_id]() {
+        std::thread([this, cur_x, cur_y, target_x, target_y, tile_x, tile_y, steps, delay, net_id, flying]() {
             for (int i = 1; i <= steps; ++i) {
                 if (!enet_.isConnected()) break;
                 float progress = static_cast<float>(i) / static_cast<float>(steps);
                 float step_x = cur_x + (target_x - cur_x) * progress;
                 float step_y = cur_y + (target_y - cur_y) * progress;
 
-                uint32_t flags = TankFlags::ON_GROUND;
+                uint32_t flags = flying ? TankFlags::FLYING : TankFlags::ON_GROUND;
                 if (target_x < cur_x) flags |= TankFlags::FACING_LEFT;
 
                 auto pkt = TankPacketHelper::createState(net_id, step_x, step_y, flags);
                 sendTankPacket(pkt);
                 world_.setLocalPos(step_x, step_y);
 
-                if (step_delay_ms > 0 && i < steps) {
-                    AntiDetection::sleepWithJitter(step_delay_ms, std::max(2, step_delay_ms / 4));
+                if (delay > 0 && i < steps) {
+                    AntiDetection::sleepWithJitter(delay, std::max(2, delay / 4));
                     AntiDetection::maybeHumanPause(0.015f, 60, 150);
                 }
             }
@@ -213,6 +219,83 @@ void BotActions::respawn() {
     if (!enet_.isConnected()) return;
     enet_.sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT, "action|respawn\n");
     Logger::log("[ACTION] 🔄 Respawn dikirim ke server");
+}
+
+void BotActions::requestTileChange(int tile_x, int tile_y, uint16_t item_id) {
+    if (!enet_.isConnected()) return;
+    float px = 0.0f, py = 0.0f;
+    int cur_tx = 0, cur_ty = 0;
+    world_.getLocalPos(px, py, cur_tx, cur_ty);
+
+    auto pkt = TankPacketHelper::createTileChange(world_.getLocalNetId(), tile_x, tile_y, item_id, px, py);
+    sendTankPacket(pkt);
+    Logger::log("[ACTION] 🔨 RequestTileChange item=", item_id, " pada tile (", tile_x, ", ", tile_y, ")");
+}
+
+void BotActions::handleTouch(float x, float y, uint16_t item_id) {
+    if (!enet_.isConnected()) return;
+    int tx = 0, ty = 0;
+    if (x > 100.0f || y > 100.0f) {
+        tx = static_cast<int>(x / 32.0f);
+        ty = static_cast<int>(y / 32.0f);
+    } else {
+        tx = static_cast<int>(x);
+        ty = static_cast<int>(y);
+    }
+
+    uint16_t use_item = (item_id != 0) ? item_id : selected_item_.load();
+    requestTileChange(tx, ty, use_item);
+}
+
+void BotActions::setModFly(bool enable) {
+    mod_fly_ = enable;
+    Logger::log("[ACTION] 🕊️ ModFly: ", enable ? "ENABLED" : "DISABLED");
+}
+
+bool BotActions::isModFly() const {
+    return mod_fly_.load();
+}
+
+void BotActions::setNoName(bool enable) {
+    no_name_ = enable;
+    Logger::log("[ACTION] 👤 NoName: ", enable ? "ENABLED" : "DISABLED");
+}
+
+bool BotActions::isNoName() const {
+    return no_name_.load();
+}
+
+void BotActions::setSpeed(int speed_delay_ms) {
+    speed_delay_ = std::max(1, speed_delay_ms);
+}
+
+int BotActions::getSpeed() const {
+    return speed_delay_.load();
+}
+
+void BotActions::setPunchRange(int range) {
+    punch_range_ = std::max(1, range);
+}
+
+int BotActions::getPunchRange() const {
+    return punch_range_.load();
+}
+
+void BotActions::setBuildRange(int range) {
+    build_range_ = std::max(1, range);
+}
+
+int BotActions::getBuildRange() const {
+    return build_range_.load();
+}
+
+void BotActions::setItemSelected(uint16_t item_id) {
+    selected_item_ = item_id;
+    Logger::log("[ACTION] 🎒 Item Selected: ID=", item_id);
+}
+
+uint16_t BotActions::getItemSelected() const {
+    return selected_item_.load();
 }
 
 // ============================================================

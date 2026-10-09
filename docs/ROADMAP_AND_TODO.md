@@ -18,6 +18,9 @@ Dokumen ini merinci status implementasi proyek saat ini, riwayat masalah teknis 
 | **Fase 5.4** | Generator Hardware Fingerprint Persisten (`cache/fingerprints/`) & Human Delay Jitter | ✅ Selesai | [`src/anti_detection.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/anti_detection.hpp), [`src/anti_detection.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/anti_detection.cpp) |
 | **Fase 5.5** | Sistem Direktori Terpadu `cache/` (Fingerprints, `accounts.txt`, `items.dat` Parser & Auto-Sync) | ✅ Selesai | [`src/item_database.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/item_database.hpp), [`src/item_database.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/item_database.cpp) |
 | **Fase 5.6** | Pelacakan Live Statistik Akun (Level, Gems, Played, Age) & Sinkronisasi Persisten | ✅ Selesai | [`src/bot_stats.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_stats.hpp), [`src/bot_stats.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_stats.cpp), [`src/gui.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/gui.cpp) |
+| **Fase 6.1** | Algoritma A* Pathfinding (`FindPath`/`CheckPath`) & Grid World Collision | ✅ Selesai | [`src/world.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/world.hpp), [`src/world.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/world.cpp), [`src/lua_engine.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/lua_engine.cpp) |
+| **Fase 6.2** | Emulasi Offsets Standalone (15 Offsets) & Binary Collision `items.dat` | ✅ Selesai | [`src/item_database.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/item_database.cpp), [`src/bot_actions.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_actions.cpp), [`src/lua_engine.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/lua_engine.cpp) |
+| **Fase 6.3** | Full Bothax 43 Functions, 16 Structures, CamelCase Aliases & Multi-Hook Engine | ✅ Selesai | [`src/lua_engine.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/lua_engine.hpp), [`src/lua_engine.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/lua_engine.cpp), [`src/world.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/world.hpp) |
 
 ---
 
@@ -142,6 +145,80 @@ Di bawah ini adalah kumpulan masalah non-sepele dalam reverse-engineering dan pe
   4. **Dynamic Account Age**: Hitung umur akun dalam hari berdasarkan selisih waktu sekarang dengan stempel waktu pembuatan fingerprint / profil akun (`first_seen_epoch`), dengan fallback nilai eksplisit dari respon server.
   5. Sediakan tombol sinkronisasi manual interaktif `[ 🔄##query_stats ]` di GUI yang mengirim perintah `/status` dan `/me` ke server untuk memperbarui seluruh data secara instan.
 
+### 13. Emulasi Standalone Offsets Eksekusi & Native Collision Checking
+- **Masalah**: Skrip Bothax/Lucifer di komunitas sering kali mengandalkan memory offsets biner Growtopia (`Growtopia.exe` client injection) untuk fungsi-fungsi penting seperti `RequestTileChange`, `HandleTouchAtWorldCoordinates`, `IsCollidable`, `IsDoor`, dan cheat toggles (`ModFly`, `NoName`, `CanSeeGhost`). Jika bot berjalan dalam mode *standalone headless* (tanpa `Growtopia.exe`), pemanggilan fungsi ini sebelumnya berupa no-op stub kosong atau gagal dieksekusi.
+- **Penyebab**: Offsets memori biner mengasumsikan adanya process memory space `Growtopia.exe`, pointer GameLogic, dan BaseApp asli.
+- **Solusi**:
+  1. **Standalone Emulation Architecture**: Alih-alih melakukan memory read/write crash-prone ke proses eksternal, bot mengemulasikan perilaku semantik dari setiap offset secara native:
+     - `O_REQUESTTILECHANGE` (`0xA1ED90`) & `O_HANDLETOUCHATWORLDCOORDINATES` (`0x90A090`): Dipetakan ke `BotActions::requestTileChange()` dan `handleTouch()`, yang membangun dan mendispatch Tank Packet state (`PACKET_STATE`, type 0) berformat 56-byte lengkap dengan tile position `(x, y)` dan item ID.
+     - `O_ISCOLLIDABLE` (`0x57FEE0`) & `O_ISDOOR` (`0x582650`): Mengkueri database item lokal `ItemDatabase` yang mem-parse byte `collision_type` biner dari `items.dat` (0 = none, 1 = solid, 2 = platform, 3 = door).
+     - `O_MODFLY` (`0x9BE5A0`): Menyetel state `mod_fly_` pada bot. Setiap kali bot berpindah via `moveTo()`, flag `TankFlags::FLYING` (0x02) secara otomatis disuntikkan ke dalam paket pergerakan, dan pergerakan diabaikan dari penalti gravitasi atau rintangan.
+     - `O_NONAME` (`0x8E8F50`): Mengatur flag `no_name_` pada bot actions.
+     - `O_GETGAMELOGIC` (`0x51E220`) & `O_GETBASEAPP` (`0x515810`): Mengembalikan base address emulasi yang valid (`0x10000000` dan `0x20000000`), sehingga skrip yang memvalidasi pointer tidak throw error nil.
+  2. **Grid A* Pathfinding 2D**: Mengimplementasikan algoritma A* pada grid $100 \times 60$ world dengan priority queue dan heuristik Manhattan. Fungsi `isTileSolid(x, y)` mengombinasikan data tile foreground/background world dengan collision database dari `items.dat`.
+  3. **Tabel Offsets di Lua**: Seluruh 15 nilai hex offset dari `offsets.txt` diekspor baik ke tabel `Offsets` maupun variabel global `O_*`, menjamin 100% kompatibilitas skrip.
+
+### 14. Pencegahan Crash / Deadlock Mutex Rekursif & Non-Blocking Render Loop pada Mesin Lua
+- **Masalah**: Skrip Lua yang mengeksekusi loop dengan packet sending seperti `while true do SendPacket(2, "action|input\ntext|".. textSpam) Sleep(delaySpam) end` menyebabkan bot crash seketika (Exit code 1) atau jendela GUI DirectX 11 menjadi beku (*Not Responding*).
+- **Penyebab**:
+  1. **Self-Deadlock / std::system_error pada Mutex**: `LuaEngine::workerThread` mengakuisisi `lua_mtx_` selama menjalankan `luaL_dostring()`. Saat skrip mengeksekusi `SendPacket()`, C++ callback `bothaxSendPacket` memanggil hook dispatcher `triggerOnSendPacket()` pada thread yang sama. Pada implementasi awal, `lua_mtx_` adalah `std::mutex` non-rekursif. Memanggil `lock()` kembali pada thread yang sudah memegang `std::mutex` dideteksi oleh MSVC STL runtime dan melempar `std::system_error` (*resource deadlock avoided* / *device or resource busy*). Karena tidak ditangkap di thread worker, aplikasi langsung memanggil `std::terminate()` dan crash.
+  2. **Render Loop Blocking**: `triggerOnDraw(ImGui::GetIO().DeltaTime)` dipanggil 60 kali per detik dari thread rendering DirectX 11 di GUI. Jika `lua_mtx_` dipegang oleh thread worker selama eksekusi skrip, thread GUI terblokir menunggu mutex, membekukan jendela aplikasi.
+  3. **Stack Corruption pada `lua_next`**: Ketika `lua_pcall()` di dalam dispatcher hook mengembalikan kegagalan (misalnya fungsi hook mengandung error), string error yang ditaruh Lua di puncak stack tidak di-pop. Akibatnya, iterasi `lua_next()` berikutnya membaca string error tersebut sebagai `key` tabel, memicu fatal panic `"invalid key to 'next'"`.
+- **Solusi**:
+  1. **Recursive Mutex**: Mengubah `lua_mtx_` menjadi `std::recursive_mutex` pada [`src/lua_engine.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/lua_engine.hpp) dan [`src/lua_engine.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/lua_engine.cpp). Hal ini memungkinkan callback C++ yang dipicu dari dalam eksekusi Lua (seperti `SendPacket`, `SendPacketRaw`, `RequestTileChange`) untuk memanggil trigger dispatcher secara reentrant tanpa deadlock atau exception.
+  2. **Zero-Overhead Hook Counter (`hook_count_`)**: Menambahkan penghitung atomic `hook_count_`. Jika skrip tidak mendaftarkan hook (kasus mayoritas skrip seperti spammer dan farming), seluruh trigger method (`triggerOnVariant`, `triggerOnSendPacket`, `triggerOnDraw`, dll.) langsung mengembalikan nilai tanpa menyentuh mutex sama sekali.
+  3. **Non-Blocking GUI Render Hook**: Mengubah penguncian pada `triggerOnDraw` dan `triggerOnInput` menggunakan `std::unique_lock<std::recursive_mutex> lock(lua_mtx_, std::try_to_lock)`. Jika mutex sedang sibuk, frame render DirectX 11 tetap berjalan mulus pada 60 FPS tanpa jeda mikrodetik pun.
+  4. **Reentrancy Guards & Safe Packet Routing**: Menambahkan pelindung `thread_local bool in_send_packet_hook` untuk mencegah rekursi tak hingga jika hook `OnSendPacket` memanggil `SendPacket()`. Menambahkan auto-routing cerdas: jika `self->enet_` belum terkoneksi tetapi bot di `BotManager` sedang online di world, pengiriman paket dialihkan otomatis ke ENet peer bot aktif.
+  5. **Clean Lua Stack Restoration**: Memastikan seluruh hasil eksekusi `lua_pcall()` (baik sukses maupun error) di-pop secara tuntas dari stack sebelum memanggil iterasi `lua_next()` berikutnya.
+  6. **Alias Global Bothax**: Mendaftarkan alias `Log` (huruf kapital) mendampingi `LogToConsole`, `log`, dan `print`.
+
+### 15. Manajemen Siklus Hidup Hook & Deteksi Liveness pada Lua Worker Thread
+- **Masalah**: Thread worker script (`LuaEngine::workerThread`) menggantung (hang/stuck) dan tidak pernah selesai meskipun seluruh baris kode script telah selesai dieksekusi atau hook telah dihapus dengan `RemoveHook(label)` / `RemoveHooks()`.
+- **Penyebab**: Loop liveness worker thread memeriksa apakah ada hook terdaftar dengan melakukan iterasi `lua_next()` pada sub-tabel registry (`OnVariant`, `OnSendPacket`, dll.). Ketika skrip memanggil `RemoveHook()`, field fungsi di dalam sub-tabel disetel ke `nil`. Namun, sub-tabel kategori itu sendiri masih ada di dalam tabel registry induk. Akibatnya, `lua_next()` pada registry tabel tetap mengembalikan sub-tabel kosong tersebut sebagai elemen yang ada, sehingga loop liveness mengira masih ada hook yang aktif dan tidak pernah keluar.
+- **Solusi**:
+  1. Gunakan penghitung atomic `std::atomic<int> hook_count_` pada `LuaEngine`.
+  2. Setiap kali `bothaxAddHook` menambahkan entri baru, inkrementasikan `hook_count_`.
+  3. Saat `bothaxRemoveHook` (baik varian 1 argumen `(label)` maupun 2 argumen `(event, label)`) menghapus entri, dekrementasikan `hook_count_`. Pada `bothaxRemoveHooks`, setel ulang `hook_count_ = 0`.
+  4. Loop worker thread cukup memeriksa `hook_count_ > 0`. Bila tidak ada hook yang aktif, worker thread langsung keluar secara bersih (*graceful exit*), mencegah thread zombie atau kebuntuan saat evaluasi skrip selesai.
+
+### 16. Inisialisasi Dinamis dan Batas Array Grid Tile pada `WorldState`
+- **Masalah**: Skrip Lua yang memanggil `GetTile(x, y)` atau `SetTileFlags(x, y, flags)` sebelum peta world termuat penuh dari server atau saat bot berjalan dalam mode evaluasi skrip standalone memicu *out-of-range memory access* atau crash.
+- **Penyebab**: Objek `WorldState` diinisialisasi dengan lebar `width_ = 100` dan tinggi `height_ = 60` (`total = 6000`), tetapi vektor `tiles_` dibiarkan kosong hingga paket peta biner (`PACKET_SEND_MAP_DATA`) diterima dari server. Jika skrip mengakses tile sebelum map termuat, `tiles_.size()` adalah `0`, sehingga kalkulasi indeks `y * width_ + x` melebihi kapasitas memori vektor.
+- **Solusi**:
+  1. Pada konstruktor `WorldState` dan fungsi `clearWorld()`, inisialisasikan `tiles_.resize(width_ * height_)`.
+  2. Pada accessor `getTile(x, y, ...)` dan `setTileFlags(x, y, ...)`, tambahkan pengecekan batas dan auto-resize defensif: jika ukuran `tiles_` belum mencapai `width_ * height_`, lakukan resize secara otomatis sebelum mengakses elemen indeks.
+
+### 17. Serialisasi & Deserialisasi Pemetaan Struktur `Variant` dan `GameUpdatePacket`
+- **Masalah**:
+  1. `Variant` pada protokol Growtopia/GTPS merepresentasikan data vektor 2D/3D bukan sebagai pointer ke struktur terpisah melainkan komponen skalar float individual: `float_val` (X), `float_val2` (Y), dan `float_val3` (Z), serta integer unsigned disimpan pada `uint_val`. Jika parser Lua mencoba mengakses `v.vec2_val` atau `v.vec3_val`, kompilator C++ akan melempar error kompilasi karena field tersebut tidak ada pada struct C++.
+  2. `GameUpdatePacket` Bothax membutuhkan 21 nama field termasuk alias (`x`, `y`, `pos_x`, `pos_y`, `value`, `int_data`, `px`, `py`, `tx`, `ty`, `int_x`, `int_y`, `snetid`, `secondnetid`, `state`). Pada struct C++ GTPS, nilai `state` Bothax tersimpan pada `float_var`.
+- **Solusi**:
+  1. Buat helper `pushTankUpdatePacket()` di `lua_engine.cpp` yang mengisi seluruh 21 atribut dan alias secara lengkap.
+  2. Pada pemrosesan `VariantList`, petakan tipe 3 (`Vec2`) ke `{ x = v.float_val, y = v.float_val2 }`, tipe 4 (`Vec3`) ke `{ x = v.float_val, y = v.float_val2, z = v.float_val3 }`, dan tipe 5 ke `v.uint_val`.
+  3. Pada `bothaxSendVariantList`, dukung parsing tabel Lua dengan field `x`, `y`, `z` menjadi komponen vektor float `Variant` GTPS secara akurat.
+
+### 18. Integritas Presisi 64-Bit pada `Hash64` dan Forwarding Multi-Argumen `RunDelayed`/`RunThread`
+- **Masalah**:
+  1. `Hash64(str)` sebelumnya menggunakan `lua_pushnumber()` yang mengonversi integer 64-bit menjadi IEEE 754 double precision float (53-bit mantissa), menyebabkan bit terendah mengalami pembulatan (*precision truncation*).
+  2. `RunDelayed(delay, fn, ...)` dan `RunThread(fn, ...)` pada spesifikasi Bothax dapat menerima argumen variadik tambahan untuk diteruskan ke fungsi target. Menggunakan binding C++ sederhana sering kali hanya meneruskan parameter fungsi tanpa argumen tambahan.
+- **Solusi**:
+  1. Gunakan `lua_pushinteger()` pada `bothaxHash64()` yang pada Lua 5.4 64-bit secara bawaan merupakan tipe `int64_t` bertanda/tak-bertanda penuh, menjamin 100% presisi hash FNV-1a.
+  2. Simpan seluruh argumen variadik ke dalam tabel sementara di registry Lua (`lua_createtable`, `lua_rawseti`), lalu di dalam invocation wrapper, gunakan loop `lua_rawgeti` untuk me-unpack seluruh argumen sebelum memanggil `lua_pcall()`.
+
+### 19. Kebijakan Single-Instance Otomatis: Terminasi Instance Lama Saat Peluncuran Ulang
+- **Masalah**: Pengguna yang menjalankan executable `gtps_bot.exe` lebih dari sekali (misal: saat restart atau pengujian skrip baru) sering kali mendapati instance lama masih berjalan di latar belakang (background process / zombie). Akibatnya, dua instance berjalan secara simultan, berebut port ENet, bersaing pada koneksi proxy SOCKS5, menghasilkan log yang bertubrukan di konsol, dan memicu error rendering DirectX 11.
+- **Penyebab**: Windows secara bawaan mengizinkan eksekusi banyak proses dari binary yang sama secara independen jika tidak ada mekanisme eksklusi timbal balik (*mutual exclusion*) atau deteksi proses aktif sebelumnya.
+- **Solusi**:
+  1. Di [`src/main.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/main.cpp), implementasikan fungsi `terminatePreviousInstances()` yang berjalan saat startup:
+     - Gunakan `CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)` untuk memindai daftar proses aktif di Windows.
+     - Dapatkan path file executable kita saat ini melalui `GetModuleFileNameA()`.
+     - Identifikasi setiap proses dengan nama file dan image path yang sama dengan executable kita, tetapi memiliki PID berbeda (`th32ProcessID != GetCurrentProcessId()`).
+     - Buka handle proses lama dengan `OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, ...)`.
+     - Kirim `WM_CLOSE` ke seluruh jendela GUI instance lama via `EnumWindows()` agar proses lama dapat melakukan cleanup wajar.
+     - Berikan waktu tenggang hingga 400 milidetik via `WaitForSingleObject()`.
+     - Jika proses lama belum keluar (atau dalam mode CLI/stuck), panggil `TerminateProcess()` secara paksa untuk membebaskan seluruh port, socket, dan GPU buffer seketika.
+  2. Tambahkan flag command-line `--allow-multiple` jika pengguna secara sadar ingin menjalankan multi-instance secara terpisah.
+
 ---
 
 ## 🛠️ Panduan Debugging & Troubleshooting
@@ -174,54 +251,21 @@ Jika akun terkena suspend atau Anda ingin membuat profil hardware yang baru:
 
 Berikut adalah panduan langkah demi langkah untuk melanjutkan implementasi fitur-fitur tingkat lanjut:
 
-### Milestone 6.1: Algoritma A* Pathfinding (`FindPath`)
-**Tujuan**: Mengizinkan bot bernavigasi secara otomatis dari koordinat `(startX, startY)` ke `(targetX, targetY)` dengan menghindari rintangan, duri (*spikes*), lava, dan memperhitungkan gravitasi.
-
-**Langkah Implementasi**:
-1. Buka file [`src/world_state.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/world_state.hpp).
-2. Tambahkan representasi Node untuk grid $100 \times 60$:
-   ```cpp
-   struct PathNode {
-       int x, y;
-       float g_cost, h_cost;
-       PathNode* parent = nullptr;
-       float f_cost() const { return g_cost + h_cost; }
-   };
-   ```
-3. Implementasikan fungsi `std::vector<std::pair<int, int>> FindPath(int startX, int startY, int endX, int endY)`:
-   - Gunakan `std::priority_queue` untuk Open Set.
-   - Evaluasi apakah sebuah blok padat menggunakan `isTileSolid(x, y)`:
-     - Tile padat (misal ID 2: Dirt, ID 4: Granite, ID 8: Bedrock).
-     - Tile platform (ID 18: Wooden Platform - hanya padat dari atas jika bot sedang turun).
-     - Tile berbahaya (ID 28: Lava, ID 34: Spike - beri penalti biaya tinggi atau tandai sebagai rintangan).
-4. Sambungkan ke Lua engine pada `bot:findPath(x, y)` dan jalankan interpolasi pergerakan menggunakan `bot:moveTo(x, y)` dengan delay human-like.
+### Milestone 6.1: Algoritma A* Pathfinding (`FindPath` & `CheckPath`) — ✅ Selesai
+**Status**: Diimplementasikan di [`src/world.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/world.hpp), [`src/world.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/world.cpp), dan diekspor ke [`src/lua_engine.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/lua_engine.cpp).
+- Grid 2D $100 \times 60$ tile dengan `std::priority_queue` berbasis Manhattan distance.
+- Memeriksa kepadatan tile secara akurat menggunakan `ItemDatabase` (`isCollidable`).
+- Menyediakan `FindPath(x, y)` (berjalan melangkah ke target) dan `CheckPath(x, y)` (pengecekan konektivitas rute tanpa berpindah).
+- Mendukung bypass gravitasi saat status `ModFly` aktif.
 
 ---
 
-### Milestone 6.2: Parsing & Caching Database Item (`items.dat`)
-**Tujuan**: Menyimpan informasi nama item, tipe blok, waktu panen, properti seed, dan collision type secara offline.
-
-**Langkah Implementasi**:
-1. Buat file baru `src/items_database.hpp` dan `src/items_database.cpp`.
-2. Format biner `items.dat` Growtopia:
-   - 2 byte: `version` (misal 11, 14, 19).
-   - 4 byte: `item_count`.
-   - Loop per item:
-     - 4 byte: `item_id`.
-     - 1 byte: `properties`.
-     - 1 byte: `item_type`.
-     - 1 byte: `material`.
-     - 2 byte length + string: `item_name` (didekripsi dengan XOR menggunakan key `"PBG892FYM0POOK тяжело"` atau shift cipher sesuai versi game).
-     - 2 byte length + string: `texture_path`.
-     - 4 byte: `texture_hash`.
-     - 1 byte: `visual_type`.
-     - 4 byte: `cook_time` / `grow_time`.
-3. Buat antarmuka pencarian cepat:
-   ```cpp
-   const ItemDefinition* getItem(uint32_t id) const;
-   const ItemDefinition* findItemByName(const std::string& name) const;
-   ```
-4. Ekspor ke Lua: `GetItemInfo(itemId)` yang mengembalikan tabel berisi `{ name, type, growTime, rarity }`.
+### Milestone 6.2: Parsing & Caching Database Item (`items.dat`) — ✅ Selesai
+**Status**: Diimplementasikan di [`src/item_database.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/item_database.hpp) dan [`src/item_database.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/item_database.cpp).
+- Mendukung pemuatan otomatis file `items.dat` dari root direktori proyek atau subfolder `cache/`.
+- Membaca nama item, byte `collision_type` (0 = none, 1 = solid, 2 = platform, 3 = door/portal).
+- Menyediakan lookup cepat `isCollidable(item_id)` dan `isDoor(item_id)`.
+- Terintegrasi penuh ke fungsi Lua `IsCollidable(id)`, `IsDoor(id)`, `GetItemByIDSafe(id)`, dan grid world.
 
 ---
 

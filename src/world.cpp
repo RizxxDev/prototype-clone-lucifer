@@ -1,14 +1,18 @@
 #include "world.hpp"
 #include "packet.hpp"
 #include "logger.hpp"
+#include "item_database.hpp"
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <queue>
+#include <cmath>
 
 WorldState::WorldState() {
     local_player_.is_local = true;
     local_player_.x = 640.0f;
     local_player_.y = 736.0f;
+    tiles_.resize(width_ * height_);
 }
 
 std::string WorldState::stripColorCodes(const std::string& text) {
@@ -31,9 +35,10 @@ std::string WorldState::stripColorCodes(const std::string& text) {
 void WorldState::clearWorld() {
     std::lock_guard<std::mutex> lock(mtx_);
     world_name_.clear();
-    tiles_.clear();
+    tiles_.assign(width_ * height_, Tile{});
     players_.clear();
     dropped_items_.clear();
+    npcs_.clear();
 }
 
 void WorldState::parseSpawn(const std::string& spawn_str, const std::string& my_name) {
@@ -170,9 +175,10 @@ void WorldState::parseMapData(const uint8_t* extra_data, size_t size) {
                     Tile t;
                     t.fg = reader.u16();
                     t.bg = reader.u16();
-                    reader.u16(); // tile data / extra
-                    reader.u8();  // flags 1
-                    reader.u8();  // flags 2
+                    t.locktile = reader.u16(); // tile data / extra
+                    uint8_t flags1 = reader.u8();  // flags 1
+                    uint8_t flags2 = reader.u8();  // flags 2
+                    t.flags = static_cast<uint16_t>(flags1 | (flags2 << 8));
                     if (i < tiles_.size()) {
                         tiles_[i] = t;
                     }
@@ -273,15 +279,37 @@ int WorldState::getHeight() {
 }
 
 bool WorldState::getTile(int x, int y, uint16_t& out_fg, uint16_t& out_bg) {
+    uint16_t locktile = 0, flags = 0;
+    return getTile(x, y, out_fg, out_bg, locktile, flags);
+}
+
+bool WorldState::getTile(int x, int y, uint16_t& out_fg, uint16_t& out_bg, uint16_t& out_locktile, uint16_t& out_flags) {
     std::lock_guard<std::mutex> lock(mtx_);
     if (x < 0 || x >= width_ || y < 0 || y >= height_) return false;
+    if (tiles_.size() < static_cast<size_t>(width_ * height_)) {
+        tiles_.resize(width_ * height_);
+    }
     size_t idx = y * width_ + x;
     if (idx < tiles_.size()) {
         out_fg = tiles_[idx].fg;
         out_bg = tiles_[idx].bg;
+        out_locktile = tiles_[idx].locktile;
+        out_flags = tiles_[idx].flags;
         return true;
     }
     return false;
+}
+
+void WorldState::setTileFlags(int x, int y, uint16_t flags) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (x < 0 || x >= width_ || y < 0 || y >= height_) return;
+    if (tiles_.size() < static_cast<size_t>(width_ * height_)) {
+        tiles_.resize(width_ * height_);
+    }
+    size_t idx = y * width_ + x;
+    if (idx < tiles_.size()) {
+        tiles_[idx].flags = flags;
+    }
 }
 
 std::vector<Tile> WorldState::getAllTiles() {
@@ -325,3 +353,219 @@ int WorldState::getItemCount(uint16_t item_id) {
     }
     return 0;
 }
+
+void WorldState::setCanSeeGhost(bool enable) {
+    can_see_ghost_ = enable;
+}
+
+bool WorldState::canSeeGhost() const {
+    return can_see_ghost_.load();
+}
+
+void WorldState::setIsDarkened(bool enable) {
+    is_darkened_ = enable;
+}
+
+bool WorldState::isDarkened() const {
+    return is_darkened_.load();
+}
+
+bool WorldState::isTileSolid(int x, int y) const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (x < 0 || x >= width_ || y < 0 || y >= height_) return true;
+    size_t idx = y * width_ + x;
+    if (idx >= tiles_.size()) return false;
+    uint16_t fg = tiles_[idx].fg;
+    if (fg == 0) return false;
+    return ItemDatabase::instance().isCollidable(fg);
+}
+
+bool WorldState::isTileDoor(int x, int y) const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (x < 0 || x >= width_ || y < 0 || y >= height_) return false;
+    size_t idx = y * width_ + x;
+    if (idx >= tiles_.size()) return false;
+    uint16_t fg = tiles_[idx].fg;
+    if (fg == 0) return false;
+    return ItemDatabase::instance().isDoor(fg);
+}
+
+bool WorldState::hasPath(int start_x, int start_y, int end_x, int end_y, bool can_fly) const {
+    if (start_x == end_x && start_y == end_y) {
+        return !isTileSolid(end_x, end_y);
+    }
+    auto path = findPath(start_x, start_y, end_x, end_y, can_fly);
+    return !path.empty();
+}
+
+std::vector<std::pair<int, int>> WorldState::findPath(int start_x, int start_y, int end_x, int end_y, bool can_fly) const {
+    std::vector<std::pair<int, int>> path;
+    if (start_x == end_x && start_y == end_y) {
+        if (!isTileSolid(end_x, end_y)) {
+            path.push_back({end_x, end_y});
+        }
+        return path;
+    }
+
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (start_x < 0 || start_x >= width_ || start_y < 0 || start_y >= height_) return path;
+    if (end_x < 0 || end_x >= width_ || end_y < 0 || end_y >= height_) return path;
+
+    auto isSolidLocked = [this](int x, int y) -> bool {
+        if (x < 0 || x >= width_ || y < 0 || y >= height_) return true;
+        size_t idx = y * width_ + x;
+        if (idx >= tiles_.size()) return false;
+        uint16_t fg = tiles_[idx].fg;
+        if (fg == 0) return false;
+        return ItemDatabase::instance().isCollidable(fg);
+    };
+
+    // Jika tile target solid, cari tile tetangga non-solid terdekat
+    if (isSolidLocked(end_x, end_y)) {
+        static const int adj_dx[4] = { 0, 0, -1, 1 };
+        static const int adj_dy[4] = { -1, 1, 0, 0 };
+        int best_x = -1, best_y = -1;
+        int best_dist = 999999;
+        for (int i = 0; i < 4; ++i) {
+            int nx = end_x + adj_dx[i];
+            int ny = end_y + adj_dy[i];
+            if (!isSolidLocked(nx, ny)) {
+                int d = std::abs(nx - start_x) + std::abs(ny - start_y);
+                if (d < best_dist) {
+                    best_dist = d;
+                    best_x = nx;
+                    best_y = ny;
+                }
+            }
+        }
+        if (best_x != -1) {
+            end_x = best_x;
+            end_y = best_y;
+        } else {
+            return path;
+        }
+    }
+
+    if (start_x == end_x && start_y == end_y) return path;
+
+    struct AStarNode {
+        int x, y;
+        float g_cost;
+        float h_cost;
+        int parent_x, parent_y;
+        float f_cost() const { return g_cost + h_cost; }
+    };
+
+    auto heuristic = [](int x1, int y1, int x2, int y2) -> float {
+        return static_cast<float>(std::abs(x1 - x2) + std::abs(y1 - y2));
+    };
+
+    auto cmp = [](const AStarNode& a, const AStarNode& b) {
+        return a.f_cost() > b.f_cost();
+    };
+
+    std::priority_queue<AStarNode, std::vector<AStarNode>, decltype(cmp)> open_set(cmp);
+    std::unordered_map<int, float> g_scores;
+    std::unordered_map<int, std::pair<int, int>> came_from;
+
+    auto coordKey = [this](int x, int y) -> int {
+        return y * width_ + x;
+    };
+
+    AStarNode start_node{ start_x, start_y, 0.0f, heuristic(start_x, start_y, end_x, end_y), -1, -1 };
+    open_set.push(start_node);
+    g_scores[coordKey(start_x, start_y)] = 0.0f;
+
+    bool reached = false;
+    int max_iterations = width_ * height_ * 2;
+    int iterations = 0;
+
+    static const int dirs[4][2] = { {0, -1}, {0, 1}, {-1, 0}, {1, 0} };
+
+    while (!open_set.empty() && iterations++ < max_iterations) {
+        AStarNode current = open_set.top();
+        open_set.pop();
+
+        if (current.x == end_x && current.y == end_y) {
+            reached = true;
+            break;
+        }
+
+        int cur_key = coordKey(current.x, current.y);
+        if (g_scores.find(cur_key) != g_scores.end() && current.g_cost > g_scores[cur_key]) {
+            continue;
+        }
+
+        for (int i = 0; i < 4; ++i) {
+            int nx = current.x + dirs[i][0];
+            int ny = current.y + dirs[i][1];
+
+            if (nx < 0 || nx >= width_ || ny < 0 || ny >= height_) continue;
+            if (isSolidLocked(nx, ny)) continue;
+
+            float move_cost = 1.0f;
+            if (!can_fly) {
+                bool has_ground = (ny + 1 >= height_) || isSolidLocked(nx, ny + 1);
+                if (has_ground) move_cost = 1.0f;
+                else move_cost = 1.25f;
+            }
+
+            float tentative_g = current.g_cost + move_cost;
+            int next_key = coordKey(nx, ny);
+
+            if (g_scores.find(next_key) == g_scores.end() || tentative_g < g_scores[next_key]) {
+                g_scores[next_key] = tentative_g;
+                came_from[next_key] = { current.x, current.y };
+                AStarNode neighbor{ nx, ny, tentative_g, heuristic(nx, ny, end_x, end_y), current.x, current.y };
+                open_set.push(neighbor);
+            }
+        }
+    }
+
+    if (reached) {
+        int curr_x = end_x;
+        int curr_y = end_y;
+        while (!(curr_x == start_x && curr_y == start_y)) {
+            path.push_back({ curr_x, curr_y });
+            int k = coordKey(curr_x, curr_y);
+            if (came_from.find(k) == came_from.end()) break;
+            auto parent = came_from[k];
+            curr_x = parent.first;
+            curr_y = parent.second;
+        }
+        std::reverse(path.begin(), path.end());
+    }
+
+    return path;
+}
+
+void WorldState::addOrUpdateNPC(int id, int type, float x, float y, float target_x, float target_y) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    npcs_[id] = ClientNPC{ id, type, x, y, target_x, target_y };
+}
+
+void WorldState::removeNPC(int id) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    npcs_.erase(id);
+}
+
+bool WorldState::getNPC(int id, ClientNPC& out_npc) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    auto it = npcs_.find(id);
+    if (it != npcs_.end()) {
+        out_npc = it->second;
+        return true;
+    }
+    return false;
+}
+
+std::vector<ClientNPC> WorldState::getNPCs() {
+    std::lock_guard<std::mutex> lock(mtx_);
+    std::vector<ClientNPC> result;
+    result.reserve(npcs_.size());
+    for (const auto& pair : npcs_) {
+        result.push_back(pair.second);
+    }
+    return result;
+}
+

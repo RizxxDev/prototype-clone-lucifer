@@ -26,3 +26,6 @@ out/
 Thumbs.db
 Desktop.ini
 imgui.ini
+items.dat
+*.enc
+*_enc

@@ -17,6 +17,7 @@ struct Variant;
 struct GameUpdatePacket;
 struct BotStats;
 class BotManager;
+class BotInstance;
 
 // ============================================================
 // Bothax & Lucifer Lua Scripting Engine
@@ -59,6 +60,8 @@ public:
     void setStats(BotStats* stats) { stats_ = stats; }
     void setBotManager(BotManager* bm) { bot_manager_ = bm; }
     BotManager* getBotManager() const { return bot_manager_; }
+    void setBotInstance(BotInstance* bi) { bot_instance_ = bi; }
+    BotInstance* getBotInstance() const { return bot_instance_; }
 
 private:
     void workerThread(std::string code);
@@ -94,6 +97,7 @@ private:
     static int bothaxGetObjectList(lua_State* L);
     static int bothaxGetPlayer(lua_State* L);
     static int bothaxGetPlayerInfo(lua_State* L);
+    static int bothaxGetPlayerItems(lua_State* L);
     static int bothaxGetPlayerList(lua_State* L);
     static int bothaxGetTile(lua_State* L);
     static int bothaxGetTiles(lua_State* L);
@@ -110,6 +114,20 @@ private:
     static int bothaxSetItemSelected(lua_State* L);
     static int bothaxSetTileFlags(lua_State* L);
 
+    // Offsets Emulation Callbacks (offsets.txt)
+    static int bothaxRequestTileChange(lua_State* L);
+    static int bothaxHandleTouchAtWorldCoordinates(lua_State* L);
+    static int bothaxIsCollidable(lua_State* L);
+    static int bothaxIsDoor(lua_State* L);
+    static int bothaxModFly(lua_State* L);
+    static int bothaxCanSeeGhost(lua_State* L);
+    static int bothaxIsDarkened(lua_State* L);
+    static int bothaxNoName(lua_State* L);
+    static int bothaxGetGameLogic(lua_State* L);
+    static int bothaxGetBaseApp(lua_State* L);
+    static int bothaxProcessTankUpdatePacket(lua_State* L);
+    static int bothaxEnetPeerSend(lua_State* L);
+
     // Lucifer Bot Callbacks
     static int luaGetBot(lua_State* L);
     static int luaGetBots(lua_State* L);
@@ -121,6 +139,7 @@ private:
     static int botWrench(lua_State* L);
     static int botEnter(lua_State* L);
     static int botCollect(lua_State* L);
+    static int botCollectNearby(lua_State* L);
     static int botDrop(lua_State* L);
     static int botTrash(lua_State* L);
     static int botRespawn(lua_State* L);
@@ -143,14 +162,16 @@ private:
     // Internal Structure Helpers
     static void pushNetAvatar(lua_State* L, const std::string& name, int netid, int userid,
                               const std::string& country, float x, float y);
-    static void pushTile(lua_State* L, int x, int y, uint16_t fg, uint16_t bg);
-    static void pushItemInfo(lua_State* L, int id, const std::string& name, int rarity, int type, int coltype);
+    static void pushTile(lua_State* L, int x, int y, uint16_t fg, uint16_t bg, uint16_t locktile = 0, uint16_t flags = 0);
+    static void pushItemInfo(lua_State* L, int id, const std::string& name, int rarity, int type, int coltype,
+                             int growtime = 0, int breakhit = 4, int clothingtype = 0);
 
     BotActions& actions_;
     WorldState& world_;
     EnetClient& enet_;
     BotStats* stats_{nullptr};
     BotManager* bot_manager_{nullptr};
+    BotInstance* bot_instance_{nullptr};
 
     std::function<Socks5Config()> get_proxy_fn_;
     std::function<void(const Socks5Config&)> set_proxy_fn_;
@@ -164,7 +185,8 @@ private:
     std::chrono::steady_clock::time_point start_time_;
 
     // Mutex & handle untuk eksekusi Lua dan hook dispatching
-    mutable std::mutex lua_mtx_;
+    mutable std::recursive_mutex lua_mtx_;
+    std::atomic<int> hook_count_{0};
     lua_State* active_L_ = nullptr;
     std::unordered_map<std::string, std::string> settings_store_;
 };

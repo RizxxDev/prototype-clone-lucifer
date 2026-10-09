@@ -32,6 +32,15 @@ BotInstance::BotInstance(int id,
         [this](const Socks5Config& p) { proxy_ = p; }
     );
     lua_engine_->setStats(&stats_);
+    lua_engine_->setBotInstance(this);
+
+    // Hubungkan hook TankPacket mentah ke mesin Lua
+    actions_->setOnSendTankPacketHook([this](const GameUpdatePacket& pkt) {
+        if (lua_engine_) {
+            return lua_engine_->triggerOnSendPacketRaw(pkt);
+        }
+        return false;
+    });
 
     stats_.loadFromFile(account_name_);
     setupPacketHandlers();
