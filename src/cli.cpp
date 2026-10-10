@@ -21,6 +21,9 @@ Cli::~Cli() {
 }
 
 void Cli::start() {
+    if (thread_.joinable()) {
+        thread_.detach();
+    }
     thread_ = std::thread(&Cli::run, this);
 }
 

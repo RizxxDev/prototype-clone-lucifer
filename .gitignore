@@ -19,6 +19,8 @@ out/
 # IDE & Editor files
 .vs/
 .vscode/
+.gemini/
+.codex/
 *.sln
 *.vcxproj*
 

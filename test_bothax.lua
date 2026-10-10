@@ -63,8 +63,8 @@ assert_true(type(cam) == "table" and type(cam.pos) == "table" and type(cam.resol
 local world = GetWorld()
 assert_true(type(world) == "table" and world.name ~= nil and world.width ~= nil and world.height ~= nil, "GetWorld fields")
 
-local inv = GetInventory()
-assert_true(type(inv) == "table", "GetInventory table")
+local inv_items = GetInventory()
+assert_true(type(inv_items) == "table", "GetInventory table")
 
 local local_player = GetLocal()
 assert_true(type(local_player) == "table" and type(local_player.pos) == "table" and local_player.netid ~= nil, "GetLocal fields")
@@ -177,6 +177,10 @@ end, 42)
 
 -- 14. CamelCase aliases
 assert_true(getTile ~= nil and getWorld ~= nil and getLocal ~= nil and findPath ~= nil, "CamelCase aliases registered")
+assert_true(type(inv(2)) == "number", "inv returns number")
+assert_true(type(GetItemCount(2)) == "number", "GetItemCount returns number")
+assert_true(Collect ~= nil and collect ~= nil and CollectNearby ~= nil, "Collect bindings registered")
+assert_true(bot ~= nil and type(bot.inv) == "function" and type(bot.getItemCount) == "function", "bot inv methods registered")
 
 Sleep(150)
 LogToConsole("[TEST] ✅ ALL BOTHAX FUNCTIONS AND STRUCTURES VALIDATED SUCCESSFULLY!")

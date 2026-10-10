@@ -1298,13 +1298,51 @@ void LuciferGui::renderTabList() {
     ImGui::PopStyleColor();
 }
 
+void LuciferGui::addExecutorLog(const std::string& msg) {
+    std::lock_guard<std::mutex> lock(executor_logs_mtx_);
+    if (executor_logs_.size() > 500) {
+        executor_logs_.erase(executor_logs_.begin(), executor_logs_.begin() + 50);
+    }
+    auto now = std::chrono::system_clock::now();
+    auto tt = std::chrono::system_clock::to_time_t(now);
+    std::tm tm_buf{};
+    localtime_s(&tm_buf, &tt);
+    char time_str[32];
+    std::strftime(time_str, sizeof(time_str), "[%H:%M:%S] ", &tm_buf);
+    executor_logs_.push_back(std::string(time_str) + msg);
+}
+
+void LuciferGui::clearExecutorLogs() {
+    std::lock_guard<std::mutex> lock(executor_logs_mtx_);
+    executor_logs_.clear();
+}
+
+LuaEngine& LuciferGui::getActiveExecutorEngine() {
+    if (bot_manager_) {
+        if (selected_bot_id_ > 0) {
+            auto b = bot_manager_->getBotById(selected_bot_id_);
+            if (b) return b->getLuaEngine();
+        }
+        auto bots = bot_manager_->getBots();
+        if (!bots.empty() && bots[0]) {
+            return bots[0]->getLuaEngine();
+        }
+    }
+    lua_engine_.setTargetBotId(selected_bot_id_);
+    return lua_engine_;
+}
+
 void LuciferGui::renderTabExecutor() {
     float avail_w = ImGui::GetContentRegionAvail().x;
     float avail_h = ImGui::GetContentRegionAvail().y;
 
     float top_bar_h = 28.0f;
     float bottom_bar_h = 32.0f;
-    float editor_h = avail_h - top_bar_h - bottom_bar_h - 14.0f;
+    float console_h = 150.0f;
+    if (avail_h < 450.0f) {
+        console_h = 100.0f;
+    }
+    float editor_h = avail_h - top_bar_h - bottom_bar_h - console_h - 24.0f;
     if (editor_h < 120.0f) editor_h = 120.0f;
 
     // Kumpulkan bot yang tersedia
@@ -1320,6 +1358,7 @@ void LuciferGui::renderTabExecutor() {
             selected_bot_id_ = current_bot->getId();
         }
     }
+    lua_engine_.setTargetBotId(selected_bot_id_);
 
     // =========================================================================
     // 1. TOP HEADER BAR: [▼] Selected Bot: <name|none>      [Dialog] [Switch] [Next]
@@ -1340,7 +1379,8 @@ void LuciferGui::renderTabExecutor() {
 
     std::string bot_label = "Selected Bot: none";
     if (current_bot) {
-        bot_label = "Selected Bot: " + current_bot->getAccountName();
+        bot_label = "Selected Bot: #" + std::to_string(current_bot->getId()) + " " + current_bot->getAccountName() +
+                    (current_bot->isOnline() ? " (Online)" : " (Offline)");
     } else if (!info_.account_name.empty()) {
         bot_label = "Selected Bot: " + info_.account_name;
     }
@@ -1358,6 +1398,7 @@ void LuciferGui::renderTabExecutor() {
         ImGui::Separator();
         if (ImGui::Selectable("none", selected_bot_id_ == 0)) {
             selected_bot_id_ = 0;
+            lua_engine_.setTargetBotId(0);
         }
         for (const auto& b : bots) {
             char item_name[128];
@@ -1366,6 +1407,7 @@ void LuciferGui::renderTabExecutor() {
                      b->isOnline() ? "Online" : "Offline");
             if (ImGui::Selectable(item_name, selected_bot_id_ == b->getId())) {
                 selected_bot_id_ = b->getId();
+                lua_engine_.setTargetBotId(selected_bot_id_);
             }
         }
         if (bots.empty() && !info_.account_name.empty()) {
@@ -1373,6 +1415,7 @@ void LuciferGui::renderTabExecutor() {
             snprintf(item_name, sizeof(item_name), "#1 %s (Single)", info_.account_name.c_str());
             if (ImGui::Selectable(item_name, selected_bot_id_ == 1)) {
                 selected_bot_id_ = 1;
+                lua_engine_.setTargetBotId(1);
             }
         }
         ImGui::EndPopup();
@@ -1405,6 +1448,7 @@ void LuciferGui::renderTabExecutor() {
             }
             int next_idx = (cur_idx + 1) % bots.size();
             selected_bot_id_ = bots[next_idx]->getId();
+            lua_engine_.setTargetBotId(selected_bot_id_);
             snprintf(executor_status_msg_, sizeof(executor_status_msg_),
                      "Switched to #%d %s", bots[next_idx]->getId(), bots[next_idx]->getAccountName().c_str());
         }
@@ -1421,6 +1465,7 @@ void LuciferGui::renderTabExecutor() {
             }
             int next_idx = (cur_idx + 1) % bots.size();
             selected_bot_id_ = bots[next_idx]->getId();
+            lua_engine_.setTargetBotId(selected_bot_id_);
             snprintf(executor_status_msg_, sizeof(executor_status_msg_),
                      "Selected #%d %s", bots[next_idx]->getId(), bots[next_idx]->getAccountName().c_str());
         }
@@ -1447,7 +1492,7 @@ void LuciferGui::renderTabExecutor() {
     ImGui::Spacing();
 
     // =========================================================================
-    // 3. BOTTOM CONTROL BAR: [▶ Run] [■ Stop] [📁 Save] [📁 New] [🗑 Delete] [🔍 View Error] [🗔 WinConsole]
+    // 3. BOTTOM CONTROL BAR: [▶ Run] [■ Stop] [📁 Save] [📁 New] [🗑 Delete] [🔍 View Error] [🧹 Clear] [🗔 WinConsole]
     // =========================================================================
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
@@ -1462,16 +1507,35 @@ void LuciferGui::renderTabExecutor() {
     float bbtn_h = 28.0f;
 
     if (ImGui::Button("▶ Run", ImVec2(0, bbtn_h))) {
+        LuaEngine& engine = getActiveExecutorEngine();
+        std::string target_name = current_bot ? current_bot->getAccountName() : (info_.account_name.empty() ? "Global" : info_.account_name);
+        int target_id = current_bot ? current_bot->getId() : selected_bot_id_;
+
+        // Pastikan callback log terpasang ke Executor Console
+        engine.setOnLogCallback([this](const std::string& msg) {
+            addExecutorLog(msg);
+        });
+        lua_engine_.setOnLogCallback([this](const std::string& msg) {
+            addExecutorLog(msg);
+        });
+
         std::string code = text_editor_ ? text_editor_->GetText() : script_buffer_;
-        if (lua_engine_.runScript(code)) {
-            strncpy_s(executor_status_msg_, "Script started successfully", sizeof(executor_status_msg_) - 1);
+        addExecutorLog("[Executor] 🚀 Menjalankan script di #" + std::to_string(target_id) + " (" + target_name + ")...");
+
+        if (engine.runScript(code)) {
+            snprintf(executor_status_msg_, sizeof(executor_status_msg_), "Running on #%d %s", target_id, target_name.c_str());
         } else {
-            strncpy_s(executor_status_msg_, "Already running or failed", sizeof(executor_status_msg_) - 1);
+            std::string err = engine.getLastError();
+            if (err.empty()) err = "Script already running or failed to initialize Lua state";
+            addExecutorLog("[Executor] ❌ " + err);
+            strncpy_s(executor_status_msg_, "Failed to start", sizeof(executor_status_msg_) - 1);
         }
     }
     ImGui::SameLine();
     if (ImGui::Button("■ Stop", ImVec2(0, bbtn_h))) {
+        getActiveExecutorEngine().stopScript();
         lua_engine_.stopScript();
+        addExecutorLog("[Executor] ⏹ Script dihentikan oleh pengguna.");
         strncpy_s(executor_status_msg_, "Script stopped", sizeof(executor_status_msg_) - 1);
     }
     ImGui::SameLine();
@@ -1482,8 +1546,10 @@ void LuciferGui::renderTabExecutor() {
         std::ofstream out("cache/scripts/executor.lua");
         if (out) {
             out << code;
+            addExecutorLog("[Executor] 💾 Script tersimpan ke cache/scripts/executor.lua");
             strncpy_s(executor_status_msg_, "Saved to cache/scripts/executor.lua", sizeof(executor_status_msg_) - 1);
         } else {
+            addExecutorLog("[Executor] ❌ Gagal menyimpan script ke file.");
             strncpy_s(executor_status_msg_, "Failed to save file", sizeof(executor_status_msg_) - 1);
         }
     }
@@ -1504,6 +1570,10 @@ void LuciferGui::renderTabExecutor() {
         show_error_modal_ = true;
     }
     ImGui::SameLine();
+    if (ImGui::Button("🧹 Clear", ImVec2(0, bbtn_h))) {
+        clearExecutorLogs();
+    }
+    ImGui::SameLine();
     if (ImGui::Button("🗔 WinConsole", ImVec2(0, bbtn_h))) {
 #ifdef _WIN32
         HWND hCon = ::GetConsoleWindow();
@@ -1517,8 +1587,11 @@ void LuciferGui::renderTabExecutor() {
     }
 
     // Right-aligned status indicators
-    if (lua_engine_.isRunning()) {
-        float elapsed = lua_engine_.getExecutionTimeMs() / 1000.0f;
+    LuaEngine& active_engine = getActiveExecutorEngine();
+    bool is_active_running = active_engine.isRunning() || lua_engine_.isRunning();
+    LuaEngine& rep_engine = active_engine.isRunning() ? active_engine : lua_engine_;
+    if (is_active_running) {
+        float elapsed = rep_engine.getExecutionTimeMs() / 1000.0f;
         char status_txt[64];
         snprintf(status_txt, sizeof(status_txt), "● Running (%.1fs)", elapsed);
         float sw = ImGui::CalcTextSize(status_txt).x;
@@ -1536,6 +1609,51 @@ void LuciferGui::renderTabExecutor() {
 
     ImGui::PopStyleColor(5);
     ImGui::PopStyleVar(3);
+
+    ImGui::Spacing();
+
+    // =========================================================================
+    // 3b. EXECUTOR LIVE OUTPUT CONSOLE
+    // =========================================================================
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.012f, 0.025f, 0.045f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.08f, 0.20f, 0.35f, 0.8f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 4.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
+
+    if (ImGui::BeginChild("ExecutorOutputConsoleBox", ImVec2(0, console_h), true)) {
+        ImGui::TextColored(ImVec4(0.25f, 0.85f, 1.0f, 1.0f), "📟 Executor Console Output");
+        ImGui::SameLine();
+        ImGui::Checkbox("Auto-scroll", &executor_auto_scroll_);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Clear##ExecClearSm")) {
+            clearExecutorLogs();
+        }
+
+        ImGui::Separator();
+
+        std::lock_guard<std::mutex> lk(executor_logs_mtx_);
+        if (executor_logs_.empty()) {
+            ImGui::TextColored(ImVec4(0.40f, 0.50f, 0.60f, 1.0f), "Ready. Click '▶ Run' to execute script on target bot. Output will appear here.");
+        } else {
+            for (const auto& line : executor_logs_) {
+                if (line.find("❌") != std::string::npos || line.find("Error") != std::string::npos || line.find("error") != std::string::npos) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", line.c_str());
+                } else if (line.find("✅") != std::string::npos || line.find("success") != std::string::npos) {
+                    ImGui::TextColored(ImVec4(0.35f, 0.95f, 0.45f, 1.0f), "%s", line.c_str());
+                } else if (line.find("[Executor]") != std::string::npos || line.find("[Bothax]") != std::string::npos) {
+                    ImGui::TextColored(ImVec4(0.4f, 0.85f, 1.0f, 1.0f), "%s", line.c_str());
+                } else {
+                    ImGui::TextUnformatted(line.c_str());
+                }
+            }
+            if (executor_auto_scroll_) {
+                ImGui::SetScrollHereY(1.0f);
+            }
+        }
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(2);
 
     // =========================================================================
     // 4. POPUP MODALS: OnDialogRequest Inspector & Lua Error Log
@@ -1591,7 +1709,8 @@ void LuciferGui::renderTabExecutor() {
         ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "❌ Lua Script Engine Error");
         ImGui::Separator();
 
-        std::string err = lua_engine_.getLastError();
+        std::string err = getActiveExecutorEngine().getLastError();
+        if (err.empty()) err = lua_engine_.getLastError();
         if (err.empty()) {
             ImGui::TextColored(ImVec4(0.2f, 0.85f, 0.3f, 1.0f), "✅ No errors reported. Lua engine is clean.");
         } else {

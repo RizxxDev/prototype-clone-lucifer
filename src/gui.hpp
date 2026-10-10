@@ -199,6 +199,12 @@ public:
     bool win_console_visible_ = true;
     char executor_status_msg_[128] = "";
     std::string fallback_last_dialog_;
+    std::vector<std::string> executor_logs_;
+    mutable std::mutex executor_logs_mtx_;
+    bool executor_auto_scroll_ = true;
+    void addExecutorLog(const std::string& msg);
+    void clearExecutorLogs();
+    LuaEngine& getActiveExecutorEngine();
 
     // Console & Log Buffers
     char log_filter_[128] = "";

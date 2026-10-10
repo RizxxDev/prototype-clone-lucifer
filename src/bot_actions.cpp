@@ -314,6 +314,10 @@ bool AutoFarmController::start(uint16_t item_id, int tile_x, int tile_y, int del
         return false; // sudah jalan
     }
 
+    if (worker_.joinable()) {
+        worker_.join();
+    }
+
     worker_ = std::thread(&AutoFarmController::farmLoop, this, item_id, tile_x, tile_y, delay_ms, hits_per_block);
     return true;
 }

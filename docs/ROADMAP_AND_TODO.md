@@ -219,6 +219,20 @@ Di bawah ini adalah kumpulan masalah non-sepele dalam reverse-engineering dan pe
      - Jika proses lama belum keluar (atau dalam mode CLI/stuck), panggil `TerminateProcess()` secara paksa untuk membebaskan seluruh port, socket, dan GPU buffer seketika.
   2. Tambahkan flag command-line `--allow-multiple` jika pengguna secara sadar ingin menjalankan multi-instance secara terpisah.
 
+
+### 20. Penanganan Crash `std::terminate()` Saat Menjalankan Script Berulang Kali (Double Run / Pencet 2x Run) di Executor
+- **Masalah**: Ketika menekan tombol **▶ Run** lebih dari sekali (baik ditekan dua kali berturut-turut, di-double click, atau dijalankan kembali setelah skrip sebelumnya selesai), aplikasi langsung crash seketika dan menutup tanpa pesan error (*exit abruptly*).
+- **Penyebab**:
+  1. Pada implementasi awal `LuaEngine::runScript()`, pengecekan thread lama hanya bergantung pada flag status: `if (is_running_.load()) { stopScript(); }`.
+  2. Saat skrip sebelumnya selesai dieksekusi (atau skrip singkat/kosong selesai dalam hitungan sub-milidetik), worker thread Lua menyetel `is_running_ = false` dan keluar dari fungsi thread.
+  3. Namun, objek `worker_` (`std::thread`) **masih berstatus `joinable() == true`** karena belum pernah dipanggil `.join()` atau `.detach()`.
+  4. Ketika pengguna menekan tombol **▶ Run** untuk kedua kalinya, `is_running_.load()` bernilai `false`, sehingga pemanggilan `stopScript()` dilewati.
+  5. Baris berikutnya mengeksekusi `worker_ = std::thread(&LuaEngine::workerThread, this, script_code);`. Berdasarkan spesifikasi standar C++ (`std::thread::operator=`), menimpa instance `std::thread` yang masih *joinable* secara mutlak memanggil `std::terminate()`, yang menyebabkan crash abort seketika.
+- **Solusi**:
+  1. Di [`src/lua_engine.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/lua_engine.cpp), ubah `LuaEngine::runScript()` agar **selalu memanggil `stopScript()` tanpa syarat**.
+  2. `stopScript()` secara aman memeriksa `if (worker_.joinable()) worker_.join();`, sehingga worker thread lama dijamin telah selesai, di-reap oleh OS, dan status `joinable()` menjadi `false` sebelum thread baru dialokasikan.
+  3. Lakukan pengamanan serupa secara defensif pada `AutoFarmController::start()` ([`src/bot_actions.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_actions.cpp)) dan `Cli::start()` ([`src/cli.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/cli.cpp)).
+
 ---
 
 ## 🛠️ Panduan Debugging & Troubleshooting

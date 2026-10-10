@@ -32,6 +32,9 @@ std::shared_ptr<BotInstance> BotManager::addBot(const std::string& name,
     bot->platform = default_platform;
     bot->protocol = default_protocol;
 
+    bot->getLuaEngine().setBotManager(this);
+    bot->getLuaEngine().setTargetBotId(id);
+
     bots_.push_back(bot);
     Logger::log("[MANAGER] ➕ Bot ditambahkan: #", id, " (", name, ")",
                 (effective_proxy.isValid() ? (" [Proxy: " + effective_proxy.toString() + "]") : " [Direct]"));

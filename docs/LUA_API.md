@@ -267,9 +267,14 @@ Semua fungsi di bawah ini dapat dipanggil dengan **PascalCase** (standar Bothax)
 | 41 | `CanSeeGhost(enable)` | `canSeeGhost` | `void` | Mengaktifkan/menonaktifkan visibilitas entitas hantu. |
 | 42 | `IsDarkened(enable)` | `isDarkened` | `void` | Mengatur visual mode gelap di world. |
 | 43 | `NoName(enable)` | `noName` | `void` | Mengaktifkan mode nama anonim pada paket pergerakan bot. |
+| 44 | `inv(item_id)` / `GetItemCount(item_id)` | `getItemCount` | `integer` | Mengambil jumlah item spesifik di dalam tas inventaris bot. |
+| 45 | `Collect([uid_or_radius])` | `collect` | `integer` | Mengambil dropped item di world via paket collect atau radius sekitar. |
+| 46 | `CollectNearby([radius])` | `collectNearby` | `integer` | Mengambil semua dropped item dalam jangkauan radius tertentu (default: 4.0 tile). |
 
 #### Utilitas Tambahan
 - `ChangeValue(key, value)` / `changeValue`: Mengubah cheat internal (`modfly`, `noname`, `canseeghost`, `speed`, `punchrange`, `buildrange`, `autoreconnect`).
+- `inv(id)` / `GetItemCount(id)` / `bot:getItemCount(id)` / `bot:inv(id)`: Mengembalikan jumlah item di inventory.
+- `Collect(uid)` / `Collect([radius])` / `bot:collect([uid/radius])`: Mengambil drop item di world.
 - `GetGameLogic()` / `getGameLogic`: Mengembalikan base pointer logika game (emulasi pointer runtime aman).
 - `GetBaseApp()` / `getBaseApp`: Mengembalikan base pointer aplikasi (emulasi pointer runtime aman).
 
@@ -418,5 +423,26 @@ RunThread(function(target_x, target_y)
         FindPath(target_x, target_y)
         LogToConsole("🎯 Bot berhasil mencapai tujuan di background thread!")
     end
-end, 10, 20)
 ```
+
+---
+
+## 🖥️ Arsitektur Executor GUI & Multi-Bot Execution Model
+
+Mulai versi ini, tab **Executor** di GUI Lucifer DX11 terhubung penuh secara dinamis ke bot yang sedang dipilih:
+
+### 1. Dynamic Engine Resolution (`getActiveExecutorEngine()`)
+- Saat pengguna memilih bot di menu dropdown Executor (misal `#1 rizzxyt`), tombol **▶ Run** mengeksekusi script langsung di dalam `LuaEngine` milik instance bot tersebut.
+- Hal ini menjamin bahwa seluruh tindakan jaringan (`bot:say`, `bot:warp`, `SendPacket`, `SendPacketRaw`), pergerakan (`bot:moveTo`, `FindPath`), dan manipulasi tile (`bot:hit`, `bot:place`, `RequestTileChange`) terkirim melalui soket ENet aktual milik bot yang sedang terhubung ke server game.
+
+### 2. Multi-Bot Delegation (`activeBot()`, `activeWorld()`, `activeActions()`, `activeEnet()`)
+- Mesin Lua memiliki lapisan resolusi aktif. Jika skrip berjalan pada engine global atau sub-engine, pemanggilan seperti `GetLocal()`, `GetWorld()`, `GetTiles()`, `GetInventory()` secara otomatis merujuk ke data state bot yang ditargetkan (`target_bot_id_`), bukan dummy state kosong.
+- Pemanggilan `getBot(id_atau_nama)` secara dinamis mengalihkan target bot ke bot tersebut.
+
+### 3. Intersepsi Paket Jaringan & Event Hooks
+- Setiap paket server yang tiba di `BotInstance` (`OnVariant`, `OnProcessTankUpdate`, `OnSendPacket`, dll.) langsung diteruskan ke event dispatcher Lua bot tersebut.
+- Skrip yang memasang `AddHook("OnVariant", ...)` atau `AddHook("OnProcessTankUpdate", ...)` dapat langsung memfilter dan memodifikasi paket secara real-time.
+
+### 4. Output Console Terintegrasi
+- Tab Executor memiliki panel **Executor Console Output** tepat di bawah tombol kontrol.
+- Setiap pemanggilan `print()`, `LogToConsole()`, log sistem Bothax, maupun runtime error traceback langsung ditampilkan secara real-time dengan penanda warna dan fitur *auto-scroll*.

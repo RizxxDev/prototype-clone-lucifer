@@ -62,6 +62,14 @@ public:
     BotManager* getBotManager() const { return bot_manager_; }
     void setBotInstance(BotInstance* bi) { bot_instance_ = bi; }
     BotInstance* getBotInstance() const { return bot_instance_; }
+    void setTargetBotId(int id) { target_bot_id_ = id; }
+    int getTargetBotId() const { return target_bot_id_; }
+    void setOnLogCallback(std::function<void(const std::string&)> cb) { on_log_cb_ = cb; }
+
+    BotInstance* activeBot();
+    WorldState& activeWorld();
+    BotActions& activeActions();
+    EnetClient& activeEnet();
 
 private:
     void workerThread(std::string code);
@@ -86,6 +94,7 @@ private:
     static int bothaxGetCamera(lua_State* L);
     static int bothaxGetClient(lua_State* L);
     static int bothaxGetInventory(lua_State* L);
+    static int bothaxInv(lua_State* L);
     static int bothaxGetItemByIDSafe(lua_State* L);
     static int bothaxGetItemByName(lua_State* L);
     static int bothaxGetItemInfo(lua_State* L);
@@ -172,6 +181,8 @@ private:
     BotStats* stats_{nullptr};
     BotManager* bot_manager_{nullptr};
     BotInstance* bot_instance_{nullptr};
+    int target_bot_id_{0};
+    std::function<void(const std::string&)> on_log_cb_;
 
     std::function<Socks5Config()> get_proxy_fn_;
     std::function<void(const Socks5Config&)> set_proxy_fn_;
@@ -186,7 +197,17 @@ private:
 
     // Mutex & handle untuk eksekusi Lua dan hook dispatching
     mutable std::recursive_mutex lua_mtx_;
+    std::unique_lock<std::recursive_mutex>* worker_lock_{nullptr};
     std::atomic<int> hook_count_{0};
+    std::atomic<int> hook_variant_count_{0};
+    std::atomic<int> hook_send_packet_count_{0};
+    std::atomic<int> hook_send_raw_count_{0};
+    std::atomic<int> hook_tank_update_count_{0};
+    std::atomic<int> hook_world_touch_count_{0};
+    std::atomic<int> hook_draw_count_{0};
+    std::atomic<int> hook_input_count_{0};
+
+    static std::string normalizeHookName(const std::string& raw);
     lua_State* active_L_ = nullptr;
     std::unordered_map<std::string, std::string> settings_store_;
 };

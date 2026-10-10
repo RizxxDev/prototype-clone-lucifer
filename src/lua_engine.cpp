@@ -108,6 +108,18 @@ static std::string toLowerStr(const std::string& str) {
     return lower;
 }
 
+std::string LuaEngine::normalizeHookName(const std::string& raw) {
+    std::string s = toLowerStr(raw);
+    if (s == "onvariant") return "OnVariant";
+    if (s == "onsendpacket") return "OnSendPacket";
+    if (s == "onsendpacketraw") return "OnSendPacketRaw";
+    if (s == "onprocesstankupdate") return "OnProcessTankUpdate";
+    if (s == "onworldtouch") return "OnWorldTouch";
+    if (s == "ondraw") return "OnDraw";
+    if (s == "oninput") return "OnInput";
+    return raw;
+}
+
 static void luaHook(lua_State* L, lua_Debug* /*ar*/) {
     lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
     LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
@@ -125,6 +137,38 @@ LuaEngine::LuaEngine(BotActions& actions, WorldState& world, EnetClient& enet)
 
 LuaEngine::~LuaEngine() {
     stopScript();
+}
+
+BotInstance* LuaEngine::activeBot() {
+    if (bot_instance_) return bot_instance_;
+    if (bot_manager_) {
+        if (target_bot_id_ > 0) {
+            auto b = bot_manager_->getBotById(target_bot_id_);
+            if (b) return b.get();
+        }
+        auto b = bot_manager_->getBotById(1);
+        if (!b) {
+            auto bots = bot_manager_->getBots();
+            if (!bots.empty() && bots[0]) b = bots[0];
+        }
+        if (b) return b.get();
+    }
+    return nullptr;
+}
+
+WorldState& LuaEngine::activeWorld() {
+    BotInstance* b = activeBot();
+    return b ? b->getWorld() : world_;
+}
+
+BotActions& LuaEngine::activeActions() {
+    BotInstance* b = activeBot();
+    return b ? b->getActions() : actions_;
+}
+
+EnetClient& LuaEngine::activeEnet() {
+    BotInstance* b = activeBot();
+    return b ? b->getEnet() : enet_;
 }
 
 bool LuaEngine::isRunning() const {
@@ -157,12 +201,22 @@ void LuaEngine::stopScript() {
 }
 
 bool LuaEngine::runScript(const std::string& script_code) {
-    if (is_running_.load()) {
-        stopScript();
-    }
+    // Selalu pastikan instance worker thread lama dihentikan dan di-join.
+    // Jika script sebelumnya sudah selesai, is_running_ bernilai false,
+    // TETAPI worker_.joinable() masih bernilai true jika belum di-join.
+    // Meng-assign worker_ = std::thread(...) saat joinable() == true
+    // secara standar C++ akan memanggil std::terminate() yang memicu crash seketika!
+    stopScript();
 
     stop_requested_ = false;
     hook_count_ = 0;
+    hook_variant_count_ = 0;
+    hook_send_packet_count_ = 0;
+    hook_send_raw_count_ = 0;
+    hook_tank_update_count_ = 0;
+    hook_world_touch_count_ = 0;
+    hook_draw_count_ = 0;
+    hook_input_count_ = 0;
     is_running_ = true;
     start_time_ = std::chrono::steady_clock::now();
 
@@ -228,9 +282,12 @@ void LuaEngine::workerThread(std::string code) {
 
     int status = LUA_OK;
     try {
-        std::lock_guard<std::recursive_mutex> lock(lua_mtx_);
+        std::unique_lock<std::recursive_mutex> lock(lua_mtx_);
+        worker_lock_ = &lock;
         status = luaL_dostring(L, code.c_str());
+        worker_lock_ = nullptr;
     } catch (const std::exception& ex) {
+        worker_lock_ = nullptr;
         status = LUA_ERRRUN;
         std::lock_guard<std::mutex> elock(error_mtx_);
         last_error_ = std::string("Exception: ") + ex.what();
@@ -594,6 +651,14 @@ void LuaEngine::registerBothaxApi(lua_State* L) {
     lua_setglobal(L, "FindPath");
     lua_pushcfunction(L, bothaxFindPath);
     lua_setglobal(L, "findPath");
+    lua_pushcfunction(L, botCollect);
+    lua_setglobal(L, "Collect");
+    lua_pushcfunction(L, botCollect);
+    lua_setglobal(L, "collect");
+    lua_pushcfunction(L, botCollectNearby);
+    lua_setglobal(L, "CollectNearby");
+    lua_pushcfunction(L, botCollectNearby);
+    lua_setglobal(L, "collectNearby");
 
     // 4. Encryption & Hashing
     lua_pushcfunction(L, bothaxEncrypt);
@@ -634,6 +699,12 @@ void LuaEngine::registerBothaxApi(lua_State* L) {
     lua_setglobal(L, "GetInventory");
     lua_pushcfunction(L, bothaxGetInventory);
     lua_setglobal(L, "getInventory");
+    lua_pushcfunction(L, bothaxInv);
+    lua_setglobal(L, "inv");
+    lua_pushcfunction(L, bothaxInv);
+    lua_setglobal(L, "GetItemCount");
+    lua_pushcfunction(L, bothaxInv);
+    lua_setglobal(L, "getItemCount");
     lua_pushcfunction(L, bothaxGetLocal);
     lua_setglobal(L, "GetLocal");
     lua_pushcfunction(L, bothaxGetLocal);
@@ -872,6 +943,10 @@ void LuaEngine::registerLuciferApi(lua_State* L) {
     lua_setfield(L, -2, "getPlayers");
     lua_pushcfunction(L, botFindItem);
     lua_setfield(L, -2, "findItem");
+    lua_pushcfunction(L, bothaxInv);
+    lua_setfield(L, -2, "inv");
+    lua_pushcfunction(L, bothaxInv);
+    lua_setfield(L, -2, "getItemCount");
     lua_pushcfunction(L, botGetPlaytime);
     lua_setfield(L, -2, "getPlaytime");
     lua_pushcfunction(L, botGetAge);
@@ -928,9 +1003,10 @@ void LuaEngine::registerLuciferApi(lua_State* L) {
     lua_setfield(L, -2, "getBaseApp");
 
     // Lucifer bot properties (level, gem_count, status, google_status)
-    int cur_lvl = stats_ ? stats_->level : 1;
-    int cur_gems = stats_ ? stats_->gems : 0;
-    bool is_online = enet_.isConnected();
+    auto active_b = activeBot();
+    int cur_lvl = active_b ? active_b->getStats().level : (stats_ ? stats_->level : 1);
+    int cur_gems = active_b ? active_b->getStats().gems : (stats_ ? stats_->gems : 0);
+    bool is_online = activeEnet().isConnected();
     lua_pushinteger(L, cur_lvl);
     lua_setfield(L, -2, "level");
     lua_pushinteger(L, cur_gems);
@@ -956,12 +1032,23 @@ int LuaEngine::luaSleep(lua_State* L) {
 
     int ms = static_cast<int>(luaL_optinteger(L, 1, 100));
     int elapsed = 0;
-    while (elapsed < ms && self && self->is_running_.load()) {
+
+    // Lepas lock mutex sementara selama tidur agar hooks pada network thread bisa dieksekusi tanpa deadlock!
+    if (self && self->worker_lock_ && self->worker_lock_->owns_lock()) {
+        self->worker_lock_->unlock();
+    }
+
+    while (elapsed < ms && self && self->is_running_.load() && !self->stop_requested_.load()) {
         int step = (std::min)(20, ms - elapsed);
         std::this_thread::sleep_for(std::chrono::milliseconds(step));
         elapsed += step;
     }
-    if (self && !self->is_running_.load()) {
+
+    if (self && self->worker_lock_ && !self->worker_lock_->owns_lock()) {
+        self->worker_lock_->lock();
+    }
+
+    if (self && (!self->is_running_.load() || self->stop_requested_.load())) {
         luaL_error(L, "Script execution stopped by user.");
     }
     return 0;
@@ -990,8 +1077,14 @@ int LuaEngine::luaLog(lua_State* L) {
     lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
     LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
-    if (self && self->bot_instance_) {
-        self->bot_instance_->addConsoleMessage(ConsoleMsgType::System, "`o[Bothax] `w" + msg);
+    if (self) {
+        if (self->on_log_cb_) {
+            self->on_log_cb_(msg);
+        }
+        auto b = self->activeBot();
+        if (b) {
+            b->addConsoleMessage(ConsoleMsgType::System, "`o[Bothax] `w" + msg);
+        }
     }
     return 0;
 }
@@ -1001,7 +1094,7 @@ int LuaEngine::bothaxAddHook(lua_State* L) {
     LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
 
-    const char* hook_type = luaL_checkstring(L, 1);
+    std::string hook_type = normalizeHookName(luaL_checkstring(L, 1));
     std::string label;
     if (lua_isnumber(L, 2)) {
         label = std::to_string(lua_tointeger(L, 2));
@@ -1018,12 +1111,12 @@ int LuaEngine::bothaxAddHook(lua_State* L) {
         lua_getfield(L, LUA_REGISTRYINDEX, "__BOTHAX_HOOKS");
     }
 
-    lua_getfield(L, -1, hook_type);
+    lua_getfield(L, -1, hook_type.c_str());
     if (!lua_istable(L, -1)) {
         lua_pop(L, 1);
         lua_newtable(L);
         lua_pushvalue(L, -1);
-        lua_setfield(L, -3, hook_type);
+        lua_setfield(L, -3, hook_type.c_str());
     }
 
     lua_pushvalue(L, 3); // callback function
@@ -1032,6 +1125,13 @@ int LuaEngine::bothaxAddHook(lua_State* L) {
 
     if (self) {
         self->hook_count_++;
+        if (hook_type == "OnVariant") self->hook_variant_count_++;
+        else if (hook_type == "OnSendPacket") self->hook_send_packet_count_++;
+        else if (hook_type == "OnSendPacketRaw") self->hook_send_raw_count_++;
+        else if (hook_type == "OnProcessTankUpdate") self->hook_tank_update_count_++;
+        else if (hook_type == "OnWorldTouch") self->hook_world_touch_count_++;
+        else if (hook_type == "OnDraw") self->hook_draw_count_++;
+        else if (hook_type == "OnInput") self->hook_input_count_++;
     }
     Logger::log("[Bothax] 🔗 Hook ditambahkan: ", hook_type, " [Label: ", label, "]");
     return 0;
@@ -1047,7 +1147,7 @@ int LuaEngine::bothaxRemoveHook(lua_State* L) {
     std::string label;
 
     if (n >= 2) {
-        event_type = luaL_checkstring(L, 1);
+        event_type = normalizeHookName(luaL_checkstring(L, 1));
         if (lua_isnumber(L, 2)) {
             label = std::to_string(lua_tointeger(L, 2));
         } else {
@@ -1098,6 +1198,15 @@ int LuaEngine::bothaxRemoveHook(lua_State* L) {
 
     if (self && removed > 0) {
         self->hook_count_ = (std::max)(0, self->hook_count_.load() - removed);
+        if (!event_type.empty()) {
+            if (event_type == "OnVariant") self->hook_variant_count_ = (std::max)(0, self->hook_variant_count_.load() - removed);
+            else if (event_type == "OnSendPacket") self->hook_send_packet_count_ = (std::max)(0, self->hook_send_packet_count_.load() - removed);
+            else if (event_type == "OnSendPacketRaw") self->hook_send_raw_count_ = (std::max)(0, self->hook_send_raw_count_.load() - removed);
+            else if (event_type == "OnProcessTankUpdate") self->hook_tank_update_count_ = (std::max)(0, self->hook_tank_update_count_.load() - removed);
+            else if (event_type == "OnWorldTouch") self->hook_world_touch_count_ = (std::max)(0, self->hook_world_touch_count_.load() - removed);
+            else if (event_type == "OnDraw") self->hook_draw_count_ = (std::max)(0, self->hook_draw_count_.load() - removed);
+            else if (event_type == "OnInput") self->hook_input_count_ = (std::max)(0, self->hook_input_count_.load() - removed);
+        }
     }
     Logger::log("[Bothax] ✂️ Hook dihapus: [Label: ", label, "] (count removed: ", removed, ")");
     return 0;
@@ -1112,6 +1221,13 @@ int LuaEngine::bothaxRemoveHooks(lua_State* L) {
     lua_setfield(L, LUA_REGISTRYINDEX, "__BOTHAX_HOOKS");
     if (self) {
         self->hook_count_ = 0;
+        self->hook_variant_count_ = 0;
+        self->hook_send_packet_count_ = 0;
+        self->hook_send_raw_count_ = 0;
+        self->hook_tank_update_count_ = 0;
+        self->hook_world_touch_count_ = 0;
+        self->hook_draw_count_ = 0;
+        self->hook_input_count_ = 0;
     }
     Logger::log("[Bothax] 🧹 Semua hooks berhasil dibersihkan.");
     return 0;
@@ -1144,24 +1260,25 @@ int LuaEngine::bothaxChangeValue(lua_State* L) {
         std::string lower_name = toLowerStr(name);
 
         if (lower_name == "modfly" || lower_name == "fly") {
-            self->actions_.setModFly(b_val);
+            self->activeActions().setModFly(b_val);
         } else if (lower_name == "canseeghost" || lower_name == "ghost" || lower_name == "seeghosts") {
-            self->world_.setCanSeeGhost(b_val);
+            self->activeWorld().setCanSeeGhost(b_val);
         } else if (lower_name == "isdarkened" || lower_name == "dark" || lower_name == "nightvision") {
-            self->world_.setIsDarkened(b_val);
+            self->activeWorld().setIsDarkened(b_val);
         } else if (lower_name == "noname" || lower_name == "hidename") {
-            self->actions_.setNoName(b_val);
+            self->activeActions().setNoName(b_val);
         } else if (lower_name == "speed") {
-            self->actions_.setSpeed(static_cast<int>(num_val > 0 ? num_val : 35));
+            self->activeActions().setSpeed(static_cast<int>(num_val > 0 ? num_val : 35));
         } else if (lower_name == "punchrange") {
-            self->actions_.setPunchRange(static_cast<int>(num_val));
+            self->activeActions().setPunchRange(static_cast<int>(num_val));
         } else if (lower_name == "buildrange") {
-            self->actions_.setBuildRange(static_cast<int>(num_val));
+            self->activeActions().setBuildRange(static_cast<int>(num_val));
         } else if (lower_name == "itemselected") {
-            self->actions_.setItemSelected(static_cast<uint16_t>(num_val));
+            self->activeActions().setItemSelected(static_cast<uint16_t>(num_val));
         } else if (lower_name == "autoreconnect" || lower_name == "auto_reconnect") {
-            if (self->bot_instance_) {
-                self->bot_instance_->getReconnectController().setEnabled(b_val);
+            auto b = self->activeBot();
+            if (b) {
+                b->getReconnectController().setEnabled(b_val);
             }
         }
     }
@@ -1182,7 +1299,7 @@ int LuaEngine::bothaxCheckPath(lua_State* L) {
     int n = lua_gettop(L);
     int start_x = 0, start_y = 0, end_x = 0, end_y = 0;
     float px = 0, py = 0;
-    self->world_.getLocalPos(px, py, start_x, start_y);
+    self->activeWorld().getLocalPos(px, py, start_x, start_y);
 
     if (n >= 4) {
         start_x = static_cast<int>(luaL_checkinteger(L, 1));
@@ -1195,8 +1312,8 @@ int LuaEngine::bothaxCheckPath(lua_State* L) {
         end_y = static_cast<int>(luaL_checkinteger(L, base + 1));
     }
 
-    bool can_fly = self->actions_.isModFly();
-    bool ok = self->world_.hasPath(start_x, start_y, end_x, end_y, can_fly);
+    bool can_fly = self->activeActions().isModFly();
+    bool ok = self->activeWorld().hasPath(start_x, start_y, end_x, end_y, can_fly);
     lua_pushboolean(L, ok);
     return 1;
 }
@@ -1214,18 +1331,18 @@ int LuaEngine::bothaxFindPath(lua_State* L) {
     int base = lua_isuserdata(L, 1) || lua_istable(L, 1) ? 2 : 1;
     int tx = static_cast<int>(luaL_checkinteger(L, base));
     int ty = static_cast<int>(luaL_checkinteger(L, base + 1));
-    int step_delay = static_cast<int>(luaL_optinteger(L, base + 2, self->actions_.getSpeed()));
+    int step_delay = static_cast<int>(luaL_optinteger(L, base + 2, self->activeActions().getSpeed()));
 
     float px = 0.0f, py = 0.0f;
     int cur_tx = 0, cur_ty = 0;
-    self->world_.getLocalPos(px, py, cur_tx, cur_ty);
+    self->activeWorld().getLocalPos(px, py, cur_tx, cur_ty);
 
-    bool can_fly = self->actions_.isModFly();
-    auto waypoints = self->world_.findPath(cur_tx, cur_ty, tx, ty, can_fly);
+    bool can_fly = self->activeActions().isModFly();
+    auto waypoints = self->activeWorld().findPath(cur_tx, cur_ty, tx, ty, can_fly);
 
     if (waypoints.empty()) {
         // Fallback jika waypoint kosong: lakukan pergerakan langsung
-        self->actions_.moveTo(tx, ty, step_delay);
+        self->activeActions().moveTo(tx, ty, step_delay);
         lua_pushboolean(L, true);
         return 1;
     }
@@ -1235,9 +1352,15 @@ int LuaEngine::bothaxFindPath(lua_State* L) {
         if (!self->is_running_.load() || self->stop_requested_.load()) break;
         int wx = waypoints[i].first;
         int wy = waypoints[i].second;
-        self->actions_.moveTo(wx, wy, step_delay);
+        self->activeActions().moveTo(wx, wy, step_delay);
         if (step_delay > 0) {
+            if (self->worker_lock_ && self->worker_lock_->owns_lock()) {
+                self->worker_lock_->unlock();
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(step_delay));
+            if (self->worker_lock_ && !self->worker_lock_->owns_lock()) {
+                self->worker_lock_->lock();
+            }
         }
     }
 
@@ -1253,7 +1376,7 @@ int LuaEngine::bothaxGetCamera(lua_State* L) {
     float px = 0, py = 0;
     int tx = 0, ty = 0;
     if (self) {
-        self->world_.getLocalPos(px, py, tx, ty);
+        self->activeWorld().getLocalPos(px, py, tx, ty);
     }
 
     lua_newtable(L);
@@ -1295,11 +1418,11 @@ int LuaEngine::bothaxGetClient(lua_State* L) {
 
     lua_newtable(L);
     if (self) {
-        lua_pushstring(L, self->enet_.getHost().c_str());
+        lua_pushstring(L, self->activeEnet().getHost().c_str());
         lua_setfield(L, -2, "address");
-        lua_pushinteger(L, self->enet_.getPort());
+        lua_pushinteger(L, self->activeEnet().getPort());
         lua_setfield(L, -2, "port");
-        lua_pushinteger(L, self->enet_.getPing());
+        lua_pushinteger(L, self->activeEnet().getPing());
         lua_setfield(L, -2, "ping");
     } else {
         lua_pushstring(L, "127.0.0.1");
@@ -1320,15 +1443,8 @@ int LuaEngine::bothaxGetInventory(lua_State* L) {
     lua_newtable(L);
     if (!self) return 1;
 
-    WorldState* w = &self->world_;
-    if (self->bot_instance_) {
-        w = &self->bot_instance_->getWorld();
-    } else if (self->bot_manager_) {
-        auto b = self->bot_manager_->getBotById(1);
-        if (b) w = &b->getWorld();
-    }
-
-    auto items = w->getInventory();
+    WorldState& w = self->activeWorld();
+    auto items = w.getInventory();
     for (size_t i = 0; i < items.size(); ++i) {
         lua_newtable(L);
         lua_pushinteger(L, items[i].id);
@@ -1341,6 +1457,28 @@ int LuaEngine::bothaxGetInventory(lua_State* L) {
         lua_setfield(L, -2, "flags");
         lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
     }
+    return 1;
+}
+
+int LuaEngine::bothaxInv(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
+    LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+
+    int base = (lua_isuserdata(L, 1) || lua_istable(L, 1)) ? 2 : 1;
+    if (lua_isnoneornil(L, base)) {
+        lua_pushinteger(L, 0);
+        return 1;
+    }
+
+    int id = static_cast<int>(luaL_checkinteger(L, base));
+    if (!self) {
+        lua_pushinteger(L, 0);
+        return 1;
+    }
+
+    int count = self->activeWorld().getItemCount(static_cast<uint16_t>(id));
+    lua_pushinteger(L, count);
     return 1;
 }
 
@@ -1442,15 +1580,8 @@ int LuaEngine::bothaxGetLocal(lua_State* L) {
         return 1;
     }
 
-    WorldState* w = &self->world_;
-    if (self->bot_instance_) {
-        w = &self->bot_instance_->getWorld();
-    } else if (self->bot_manager_) {
-        auto b = self->bot_manager_->getBotById(1);
-        if (b) w = &b->getWorld();
-    }
-
-    auto p = w->getLocalPlayer();
+    WorldState& w = self->activeWorld();
+    auto p = w.getLocalPlayer();
     pushNetAvatar(L, p.name.empty() ? "Bot" : WorldState::stripColorCodes(p.name),
                   p.net_id, p.user_id, p.country.empty() ? "id" : p.country, p.x, p.y);
     return 1;
@@ -1468,7 +1599,7 @@ int LuaEngine::bothaxGetNPC(lua_State* L) {
 
     int id = static_cast<int>(luaL_checkinteger(L, 1));
     ClientNPC npc{};
-    if (!self->world_.getNPC(id, npc)) {
+    if (!self->activeWorld().getNPC(id, npc)) {
         lua_pushnil(L);
         return 1;
     }
@@ -1503,7 +1634,7 @@ int LuaEngine::bothaxGetNPCList(lua_State* L) {
     lua_newtable(L);
     if (!self) return 1;
 
-    auto npcs = self->world_.getNPCs();
+    auto npcs = self->activeWorld().getNPCs();
     for (size_t i = 0; i < npcs.size(); ++i) {
         lua_newtable(L);
         lua_pushinteger(L, npcs[i].id);
@@ -1538,7 +1669,7 @@ int LuaEngine::bothaxGetObjectList(lua_State* L) {
     lua_newtable(L);
     if (!self) return 1;
 
-    auto items = self->world_.getDroppedItems();
+    auto items = self->activeWorld().getDroppedItems();
     for (size_t i = 0; i < items.size(); ++i) {
         lua_newtable(L);
         lua_pushinteger(L, items[i].id);
@@ -1579,12 +1710,12 @@ int LuaEngine::bothaxGetPlayer(lua_State* L) {
 
     if (lua_isstring(L, 1) && !lua_isnumber(L, 1)) {
         std::string target_name = toLowerStr(lua_tostring(L, 1));
-        auto local = self->world_.getLocalPlayer();
+        auto local = self->activeWorld().getLocalPlayer();
         if (toLowerStr(WorldState::stripColorCodes(local.name)) == target_name ||
             toLowerStr(local.name) == target_name) {
             return bothaxGetLocal(L);
         }
-        auto players = self->world_.getPlayers();
+        auto players = self->activeWorld().getPlayers();
         for (const auto& p : players) {
             if (toLowerStr(WorldState::stripColorCodes(p.name)) == target_name ||
                 toLowerStr(p.name) == target_name) {
@@ -1597,11 +1728,11 @@ int LuaEngine::bothaxGetPlayer(lua_State* L) {
     }
 
     int netid = static_cast<int>(luaL_checkinteger(L, 1));
-    if (netid == -1 || netid == self->world_.getLocalNetId()) {
+    if (netid == -1 || netid == self->activeWorld().getLocalNetId()) {
         return bothaxGetLocal(L);
     }
 
-    auto players = self->world_.getPlayers();
+    auto players = self->activeWorld().getPlayers();
     for (const auto& p : players) {
         if (p.net_id == netid) {
             pushNetAvatar(L, WorldState::stripColorCodes(p.name), p.net_id, p.user_id, p.country, p.x, p.y);
@@ -1617,8 +1748,13 @@ int LuaEngine::bothaxGetPlayerInfo(lua_State* L) {
     LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
 
-    uint32_t slots = self ? self->world_.getInventorySlots() : 16;
-    int gems = (self && self->stats_) ? self->stats_->gems : 0;
+    uint32_t slots = self ? self->activeWorld().getInventorySlots() : 16;
+    int gems = 0;
+    if (self) {
+        auto b = self->activeBot();
+        if (b) gems = b->getStats().gems;
+        else if (self->stats_) gems = self->stats_->gems;
+    }
 
     lua_newtable(L);
     lua_pushinteger(L, gems);
@@ -1630,7 +1766,7 @@ int LuaEngine::bothaxGetPlayerInfo(lua_State* L) {
     lua_setfield(L, -2, "priority");
     lua_pushinteger(L, slots);
     lua_setfield(L, -2, "size");
-    lua_pushinteger(L, self ? self->actions_.getItemSelected() : 0);
+    lua_pushinteger(L, self ? self->activeActions().getItemSelected() : 0);
     lua_setfield(L, -2, "selected");
     lua_setfield(L, -2, "backpack");
 
@@ -1666,7 +1802,7 @@ int LuaEngine::bothaxGetPlayerList(lua_State* L) {
     lua_newtable(L);
     if (!self) return 1;
 
-    auto players = self->world_.getPlayers();
+    auto players = self->activeWorld().getPlayers();
     int idx = 1;
     for (const auto& p : players) {
         if (p.is_local) continue; // Exclude local player as specified in Bothax docs
@@ -1686,7 +1822,7 @@ int LuaEngine::bothaxGetTile(lua_State* L) {
 
     uint16_t fg = 0, bg = 0, locktile = 0, flags = 0;
     if (self) {
-        self->world_.getTile(x, y, fg, bg, locktile, flags);
+        self->activeWorld().getTile(x, y, fg, bg, locktile, flags);
     }
     pushTile(L, x, y, fg, bg, locktile, flags);
     return 1;
@@ -1700,8 +1836,8 @@ int LuaEngine::bothaxGetTiles(lua_State* L) {
     lua_newtable(L);
     if (!self) return 1;
 
-    int w = self->world_.getWidth();
-    auto tiles = self->world_.getAllTiles();
+    int w = self->activeWorld().getWidth();
+    auto tiles = self->activeWorld().getAllTiles();
     for (size_t i = 0; i < tiles.size(); ++i) {
         int tx = static_cast<int>(i % w);
         int ty = static_cast<int>(i / w);
@@ -1719,17 +1855,11 @@ int LuaEngine::bothaxGetWorld(lua_State* L) {
     lua_newtable(L);
     if (!self) return 1;
 
-    WorldState* w = &self->world_;
-    if (self->bot_instance_) {
-        w = &self->bot_instance_->getWorld();
-    } else if (self->bot_manager_) {
-        auto b = self->bot_manager_->getBotById(1);
-        if (b) w = &b->getWorld();
-    }
+    WorldState& w = self->activeWorld();
 
-    int width = w->getWidth();
-    int height = w->getHeight();
-    auto dropped = w->getDroppedItems();
+    int width = w.getWidth();
+    int height = w.getHeight();
+    auto dropped = w.getDroppedItems();
     int lastoid = 0;
     for (const auto& item : dropped) {
         if (static_cast<int>(item.uid) > lastoid) {
@@ -1737,7 +1867,7 @@ int LuaEngine::bothaxGetWorld(lua_State* L) {
         }
     }
 
-    lua_pushstring(L, w->getWorldName().c_str());
+    lua_pushstring(L, w.getWorldName().c_str());
     lua_setfield(L, -2, "name");
     lua_pushinteger(L, width);
     lua_setfield(L, -2, "width");
@@ -2011,7 +2141,7 @@ int LuaEngine::bothaxRequestJoinWorld(lua_State* L) {
 
     const char* world = luaL_checkstring(L, 1);
     if (self) {
-        self->actions_.warp(world);
+        self->activeActions().warp(world);
     }
     return 0;
 }
@@ -2137,29 +2267,7 @@ int LuaEngine::bothaxSendPacket(lua_State* L) {
             }
         }
 
-        // Routing pengiriman paket
-        if (self->bot_instance_ && self->bot_instance_->getEnet().isConnected()) {
-            self->bot_instance_->getEnet().sendText(type, packet);
-        } else if (self->enet_.isConnected()) {
-            self->enet_.sendText(type, packet);
-        } else if (self->bot_manager_) {
-            auto b = self->bot_manager_->getBotById(1);
-            if (!b || !b->getEnet().isConnected()) {
-                for (auto& bot : self->bot_manager_->getBots()) {
-                    if (bot && bot->getEnet().isConnected()) {
-                        b = bot;
-                        break;
-                    }
-                }
-            }
-            if (b && b->getEnet().isConnected()) {
-                b->getEnet().sendText(type, packet);
-            } else {
-                self->enet_.sendText(type, packet);
-            }
-        } else {
-            self->enet_.sendText(type, packet);
-        }
+        self->activeEnet().sendText(type, packet);
     }
     return 0;
 }
@@ -2243,28 +2351,7 @@ int LuaEngine::bothaxSendPacketRaw(lua_State* L) {
             }
         }
         if (!to_client) {
-            if (self->bot_instance_ && self->bot_instance_->getEnet().isConnected()) {
-                self->bot_instance_->getActions().sendTankPacket(pkt);
-            } else if (self->enet_.isConnected()) {
-                self->actions_.sendTankPacket(pkt);
-            } else if (self->bot_manager_) {
-                auto b = self->bot_manager_->getBotById(1);
-                if (!b || !b->getEnet().isConnected()) {
-                    for (auto& bot : self->bot_manager_->getBots()) {
-                        if (bot && bot->getEnet().isConnected()) {
-                            b = bot;
-                            break;
-                        }
-                    }
-                }
-                if (b && b->getEnet().isConnected()) {
-                    b->getActions().sendTankPacket(pkt);
-                } else {
-                    self->actions_.sendTankPacket(pkt);
-                }
-            } else {
-                self->actions_.sendTankPacket(pkt);
-            }
+            self->activeActions().sendTankPacket(pkt);
         }
     }
     return 0;
@@ -2278,7 +2365,7 @@ int LuaEngine::bothaxSendVariantList(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     int netid = static_cast<int>(luaL_optinteger(L, 2, -1));
     if (netid == -1 && self) {
-        netid = self->world_.getLocalNetId();
+        netid = self->activeWorld().getLocalNetId();
     }
     int delay = static_cast<int>(luaL_optinteger(L, 3, 0));
 
@@ -2343,7 +2430,7 @@ int LuaEngine::bothaxSendVariantList(lua_State* L) {
         pkt.type = PACKET_CALL_FUNCTION; // 1
         pkt.net_id = netid;
         pkt.float_var = static_cast<float>(delay);
-        self->actions_.sendTankPacket(pkt, payload.data(), payload.size());
+        self->activeActions().sendTankPacket(pkt, payload.data(), payload.size());
     }
     return 0;
 }
@@ -2356,13 +2443,13 @@ int LuaEngine::bothaxSetItemSelected(lua_State* L) {
 
     int base = lua_isuserdata(L, 1) || lua_istable(L, 1) ? 2 : 1;
     int id = static_cast<int>(luaL_checkinteger(L, base));
-    self->actions_.setItemSelected(static_cast<uint16_t>(id));
+    self->activeActions().setItemSelected(static_cast<uint16_t>(id));
 
     GameUpdatePacket pkt{};
     pkt.type = PACKET_ITEM_ACTIVATE_REQUEST; // 10
     pkt.main_data = id;
-    pkt.net_id = self->world_.getLocalNetId();
-    self->actions_.sendTankPacket(pkt);
+    pkt.net_id = self->activeWorld().getLocalNetId();
+    self->activeActions().sendTankPacket(pkt);
     Logger::log("[Bothax] 📦 Item dipilih: ID ", id);
     return 0;
 }
@@ -2407,7 +2494,7 @@ int LuaEngine::bothaxSetTileFlags(lua_State* L) {
         lua_pop(L, 1);
     }
 
-    self->world_.setTileFlags(x, y, flags);
+    self->activeWorld().setTileFlags(x, y, flags);
     Logger::log("[Bothax] 🚩 SetTileFlags di (", x, ", ", y, ") -> flags=0x", std::hex, flags, std::dec);
     return 0;
 }
@@ -2439,7 +2526,7 @@ int LuaEngine::bothaxRequestTileChange(lua_State* L) {
         ty = arg3;
     }
 
-    self->actions_.requestTileChange(tx, ty, static_cast<uint16_t>(item_id));
+    self->activeActions().requestTileChange(tx, ty, static_cast<uint16_t>(item_id));
     return 0;
 }
 
@@ -2454,7 +2541,7 @@ int LuaEngine::bothaxHandleTouchAtWorldCoordinates(lua_State* L) {
     float y = static_cast<float>(luaL_checknumber(L, base + 1));
     int item_id = static_cast<int>(luaL_optinteger(L, base + 2, 0));
 
-    self->actions_.handleTouch(x, y, static_cast<uint16_t>(item_id));
+    self->activeActions().handleTouch(x, y, static_cast<uint16_t>(item_id));
     self->triggerOnWorldTouch(x, y, true);
     return 0;
 }
@@ -2484,7 +2571,7 @@ int LuaEngine::bothaxModFly(lua_State* L) {
     if (lua_gettop(L) >= base) {
         enable = lua_toboolean(L, base) != 0;
     }
-    self->actions_.setModFly(enable);
+    self->activeActions().setModFly(enable);
     lua_pushboolean(L, enable);
     return 1;
 }
@@ -2500,7 +2587,7 @@ int LuaEngine::bothaxCanSeeGhost(lua_State* L) {
     if (lua_gettop(L) >= base) {
         enable = lua_toboolean(L, base) != 0;
     }
-    self->world_.setCanSeeGhost(enable);
+    self->activeWorld().setCanSeeGhost(enable);
     lua_pushboolean(L, enable);
     return 1;
 }
@@ -2517,11 +2604,11 @@ int LuaEngine::bothaxIsDarkened(lua_State* L) {
     int base = lua_isuserdata(L, 1) || lua_istable(L, 1) ? 2 : 1;
     if (lua_gettop(L) >= base) {
         bool val = lua_toboolean(L, base) != 0;
-        self->world_.setIsDarkened(val);
+        self->activeWorld().setIsDarkened(val);
         lua_pushboolean(L, val);
         return 1;
     }
-    lua_pushboolean(L, self->world_.isDarkened());
+    lua_pushboolean(L, self->activeWorld().isDarkened());
     return 1;
 }
 
@@ -2536,7 +2623,7 @@ int LuaEngine::bothaxNoName(lua_State* L) {
     if (lua_gettop(L) >= base) {
         enable = lua_toboolean(L, base) != 0;
     }
-    self->actions_.setNoName(enable);
+    self->activeActions().setNoName(enable);
     lua_pushboolean(L, enable);
     return 1;
 }
@@ -2558,13 +2645,13 @@ int LuaEngine::bothaxGetGameLogic(lua_State* L) {
     bothaxGetClient(L);
     lua_setfield(L, -2, "client");
 
-    lua_pushboolean(L, self->enet_.isConnected());
+    lua_pushboolean(L, self->activeEnet().isConnected());
     lua_setfield(L, -2, "is_connected");
-    lua_pushinteger(L, self->actions_.getItemSelected());
+    lua_pushinteger(L, self->activeActions().getItemSelected());
     lua_setfield(L, -2, "selected_item");
-    lua_pushboolean(L, self->actions_.isModFly());
+    lua_pushboolean(L, self->activeActions().isModFly());
     lua_setfield(L, -2, "mod_fly");
-    lua_pushboolean(L, self->world_.canSeeGhost());
+    lua_pushboolean(L, self->activeWorld().canSeeGhost());
     lua_setfield(L, -2, "can_see_ghost");
 
     return 1;
@@ -2633,9 +2720,9 @@ int LuaEngine::bothaxEnetPeerSend(lua_State* L) {
 // Bothax Hook Dispatchers
 // ============================================================
 bool LuaEngine::triggerOnVariant(const std::vector<Variant>& vars, int netid, int delay) {
-    if (!is_running_.load() || hook_count_.load() == 0) return false;
-    std::lock_guard<std::recursive_mutex> lock(lua_mtx_);
-    if (!active_L_) return false;
+    if (!is_running_.load() || hook_variant_count_.load() == 0) return false;
+    std::unique_lock<std::recursive_mutex> lock(lua_mtx_, std::try_to_lock);
+    if (!lock.owns_lock() || !active_L_) return false;
 
     lua_State* L = active_L_;
     lua_getfield(L, LUA_REGISTRYINDEX, "__BOTHAX_HOOKS");
@@ -2709,9 +2796,9 @@ bool LuaEngine::triggerOnVariant(const std::vector<Variant>& vars, int netid, in
 }
 
 bool LuaEngine::triggerOnSendPacket(int type, const std::string& packet) {
-    if (!is_running_.load() || hook_count_.load() == 0) return false;
-    std::lock_guard<std::recursive_mutex> lock(lua_mtx_);
-    if (!active_L_) return false;
+    if (!is_running_.load() || hook_send_packet_count_.load() == 0) return false;
+    std::unique_lock<std::recursive_mutex> lock(lua_mtx_, std::try_to_lock);
+    if (!lock.owns_lock() || !active_L_) return false;
 
     lua_State* L = active_L_;
     lua_getfield(L, LUA_REGISTRYINDEX, "__BOTHAX_HOOKS");
@@ -2752,9 +2839,9 @@ bool LuaEngine::triggerOnSendPacket(int type, const std::string& packet) {
 }
 
 bool LuaEngine::triggerOnSendPacketRaw(const GameUpdatePacket& pkt) {
-    if (!is_running_.load() || hook_count_.load() == 0) return false;
-    std::lock_guard<std::recursive_mutex> lock(lua_mtx_);
-    if (!active_L_) return false;
+    if (!is_running_.load() || hook_send_raw_count_.load() == 0) return false;
+    std::unique_lock<std::recursive_mutex> lock(lua_mtx_, std::try_to_lock);
+    if (!lock.owns_lock() || !active_L_) return false;
 
     lua_State* L = active_L_;
     lua_getfield(L, LUA_REGISTRYINDEX, "__BOTHAX_HOOKS");
@@ -2795,9 +2882,9 @@ bool LuaEngine::triggerOnSendPacketRaw(const GameUpdatePacket& pkt) {
 }
 
 void LuaEngine::triggerOnProcessTankUpdate(const GameUpdatePacket& pkt) {
-    if (!is_running_.load() || hook_count_.load() == 0) return;
-    std::lock_guard<std::recursive_mutex> lock(lua_mtx_);
-    if (!active_L_) return;
+    if (!is_running_.load() || hook_tank_update_count_.load() == 0) return;
+    std::unique_lock<std::recursive_mutex> lock(lua_mtx_, std::try_to_lock);
+    if (!lock.owns_lock() || !active_L_) return;
 
     lua_State* L = active_L_;
     lua_getfield(L, LUA_REGISTRYINDEX, "__BOTHAX_HOOKS");
@@ -2823,9 +2910,9 @@ void LuaEngine::triggerOnProcessTankUpdate(const GameUpdatePacket& pkt) {
 }
 
 void LuaEngine::triggerOnWorldTouch(float x, float y, bool start) {
-    if (!is_running_.load() || hook_count_.load() == 0) return;
-    std::lock_guard<std::recursive_mutex> lock(lua_mtx_);
-    if (!active_L_) return;
+    if (!is_running_.load() || hook_world_touch_count_.load() == 0) return;
+    std::unique_lock<std::recursive_mutex> lock(lua_mtx_, std::try_to_lock);
+    if (!lock.owns_lock() || !active_L_) return;
 
     lua_State* L = active_L_;
     lua_getfield(L, LUA_REGISTRYINDEX, "__BOTHAX_HOOKS");
@@ -2993,14 +3080,52 @@ int LuaEngine::luaAddBot(lua_State* L) {
 }
 
 int LuaEngine::luaGetBot(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
+    LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+
+    if (self && self->bot_manager_) {
+        if (lua_isinteger(L, 1)) {
+            int target_id = static_cast<int>(lua_tointeger(L, 1));
+            auto b = self->bot_manager_->getBotById(target_id);
+            if (b) {
+                self->setTargetBotId(target_id);
+            }
+        } else if (lua_isstring(L, 1)) {
+            std::string tname = toLowerStr(lua_tostring(L, 1));
+            for (const auto& b : self->bot_manager_->getBots()) {
+                if (b && toLowerStr(b->getAccountName()) == tname) {
+                    self->setTargetBotId(b->getId());
+                    break;
+                }
+            }
+        }
+    }
+
     lua_getglobal(L, "bot");
     return 1;
 }
 
 int LuaEngine::luaGetBots(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
+    LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+
     lua_newtable(L);
-    lua_getglobal(L, "bot");
-    lua_rawseti(L, -2, 1);
+    if (self && self->bot_manager_) {
+        auto bots = self->bot_manager_->getBots();
+        for (size_t i = 0; i < bots.size(); ++i) {
+            lua_getglobal(L, "bot");
+            lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+        }
+        if (bots.empty()) {
+            lua_getglobal(L, "bot");
+            lua_rawseti(L, -2, 1);
+        }
+    } else {
+        lua_getglobal(L, "bot");
+        lua_rawseti(L, -2, 1);
+    }
     return 1;
 }
 
@@ -3012,7 +3137,7 @@ int LuaEngine::botSay(lua_State* L) {
 
     int idx = lua_isuserdata(L, 1) || lua_istable(L, 1) ? 2 : 1;
     const char* text = luaL_checkstring(L, idx);
-    self->actions_.say(text);
+    self->activeActions().say(text);
     return 0;
 }
 
@@ -3024,7 +3149,7 @@ int LuaEngine::botWarp(lua_State* L) {
 
     int idx = lua_isuserdata(L, 1) || lua_istable(L, 1) ? 2 : 1;
     const char* world = luaL_checkstring(L, idx);
-    self->actions_.warp(world);
+    self->activeActions().warp(world);
     return 0;
 }
 
@@ -3038,7 +3163,7 @@ int LuaEngine::botMoveTo(lua_State* L) {
     int x = static_cast<int>(luaL_checkinteger(L, base));
     int y = static_cast<int>(luaL_checkinteger(L, base + 1));
     int delay = static_cast<int>(luaL_optinteger(L, base + 2, 35));
-    self->actions_.moveTo(x, y, delay);
+    self->activeActions().moveTo(x, y, delay);
     return 0;
 }
 
@@ -3051,7 +3176,7 @@ int LuaEngine::botHit(lua_State* L) {
     int base = lua_isuserdata(L, 1) || lua_istable(L, 1) ? 2 : 1;
     int x = static_cast<int>(luaL_checkinteger(L, base));
     int y = static_cast<int>(luaL_checkinteger(L, base + 1));
-    self->actions_.hit(x, y);
+    self->activeActions().hit(x, y);
     return 0;
 }
 
@@ -3065,7 +3190,7 @@ int LuaEngine::botPlace(lua_State* L) {
     int id = static_cast<int>(luaL_checkinteger(L, base));
     int x = static_cast<int>(luaL_checkinteger(L, base + 1));
     int y = static_cast<int>(luaL_checkinteger(L, base + 2));
-    self->actions_.place(static_cast<uint16_t>(id), x, y);
+    self->activeActions().place(static_cast<uint16_t>(id), x, y);
     return 0;
 }
 
@@ -3078,7 +3203,7 @@ int LuaEngine::botWrench(lua_State* L) {
     int base = lua_isuserdata(L, 1) || lua_istable(L, 1) ? 2 : 1;
     int x = static_cast<int>(luaL_checkinteger(L, base));
     int y = static_cast<int>(luaL_checkinteger(L, base + 1));
-    self->actions_.wrench(x, y);
+    self->activeActions().wrench(x, y);
     return 0;
 }
 
@@ -3086,7 +3211,7 @@ int LuaEngine::botEnter(lua_State* L) {
     lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
     LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
-    if (self) self->actions_.enter();
+    if (self) self->activeActions().enter();
     return 0;
 }
 
@@ -3098,14 +3223,14 @@ int LuaEngine::botCollect(lua_State* L) {
 
     int base = lua_isuserdata(L, 1) || lua_istable(L, 1) ? 2 : 1;
     if (lua_isnoneornil(L, base)) {
-        int collected = self->actions_.collectNearby(4.0f);
+        int collected = self->activeActions().collectNearby(4.0f);
         lua_pushinteger(L, collected);
         return 1;
     }
 
     if (lua_isinteger(L, base)) {
         int uid = static_cast<int>(lua_tointeger(L, base));
-        auto dropped = self->world_.getDroppedItems();
+        auto dropped = self->activeWorld().getDroppedItems();
         bool is_uid = false;
         for (const auto& d : dropped) {
             if (static_cast<int>(d.uid) == uid) {
@@ -3114,14 +3239,14 @@ int LuaEngine::botCollect(lua_State* L) {
             }
         }
         if (is_uid || uid > 50) {
-            self->actions_.collect(uid);
+            self->activeActions().collect(uid);
             lua_pushinteger(L, 1);
             return 1;
         }
     }
 
     float r = static_cast<float>(luaL_optnumber(L, base, 4.0));
-    int collected = self->actions_.collectNearby(r);
+    int collected = self->activeActions().collectNearby(r);
     lua_pushinteger(L, collected);
     return 1;
 }
@@ -3134,7 +3259,7 @@ int LuaEngine::botCollectNearby(lua_State* L) {
 
     int base = lua_isuserdata(L, 1) || lua_istable(L, 1) ? 2 : 1;
     float r = static_cast<float>(luaL_optnumber(L, base, 4.0));
-    int collected = self->actions_.collectNearby(r);
+    int collected = self->activeActions().collectNearby(r);
     lua_pushinteger(L, collected);
     return 1;
 }
@@ -3148,7 +3273,7 @@ int LuaEngine::botDrop(lua_State* L) {
     int base = lua_isuserdata(L, 1) || lua_istable(L, 1) ? 2 : 1;
     int id = static_cast<int>(luaL_checkinteger(L, base));
     int count = static_cast<int>(luaL_optinteger(L, base + 1, 1));
-    self->actions_.drop(static_cast<uint16_t>(id), count);
+    self->activeActions().drop(static_cast<uint16_t>(id), count);
     return 0;
 }
 
@@ -3161,7 +3286,7 @@ int LuaEngine::botTrash(lua_State* L) {
     int base = lua_isuserdata(L, 1) || lua_istable(L, 1) ? 2 : 1;
     int id = static_cast<int>(luaL_checkinteger(L, base));
     int count = static_cast<int>(luaL_optinteger(L, base + 1, 1));
-    self->actions_.trash(static_cast<uint16_t>(id), count);
+    self->activeActions().trash(static_cast<uint16_t>(id), count);
     return 0;
 }
 
@@ -3169,7 +3294,7 @@ int LuaEngine::botRespawn(lua_State* L) {
     lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
     LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
-    if (self) self->actions_.respawn();
+    if (self) self->activeActions().respawn();
     return 0;
 }
 
@@ -3190,16 +3315,7 @@ int LuaEngine::botGetPlayers(lua_State* L) {
 }
 
 int LuaEngine::botFindItem(lua_State* L) {
-    lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
-    LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
-    lua_pop(L, 1);
-    if (!self) return 0;
-
-    int base = lua_isuserdata(L, 1) || lua_istable(L, 1) ? 2 : 1;
-    int id = static_cast<int>(luaL_checkinteger(L, base));
-    int count = self->world_.getItemCount(static_cast<uint16_t>(id));
-    lua_pushinteger(L, count);
-    return 1;
+    return bothaxInv(L);
 }
 
 Socks5Config LuaEngine::getProxy() const {
@@ -3290,7 +3406,9 @@ int LuaEngine::botGetPlaytime(lua_State* L) {
     lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
     LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
-    int hrs = self && self->stats_ ? static_cast<int>(self->stats_->getEffectivePlayedHours()) : 0;
+    auto ab = self ? self->activeBot() : nullptr;
+    BotStats* st = ab ? &ab->getStats() : (self ? self->stats_ : nullptr);
+    int hrs = st ? static_cast<int>(st->getEffectivePlayedHours()) : 0;
     lua_pushinteger(L, hrs);
     return 1;
 }
@@ -3299,7 +3417,9 @@ int LuaEngine::botGetAge(lua_State* L) {
     lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
     LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
-    int age = self && self->stats_ ? self->stats_->getEffectiveAgeDays() : 0;
+    auto ab = self ? self->activeBot() : nullptr;
+    BotStats* st = ab ? &ab->getStats() : (self ? self->stats_ : nullptr);
+    int age = st ? st->getEffectiveAgeDays() : 0;
     lua_pushinteger(L, age);
     return 1;
 }
@@ -3308,7 +3428,9 @@ int LuaEngine::botGetActiveTime(lua_State* L) {
     lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
     LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
-    std::string act = self && self->stats_ ? self->stats_->getFormattedActiveTime() : "0.00 hours";
+    auto ab = self ? self->activeBot() : nullptr;
+    BotStats* st = ab ? &ab->getStats() : (self ? self->stats_ : nullptr);
+    std::string act = st ? st->getFormattedActiveTime() : "0.00 hours";
     lua_pushstring(L, act.c_str());
     return 1;
 }
@@ -3317,7 +3439,9 @@ int LuaEngine::botGetLevel(lua_State* L) {
     lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
     LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
-    int lvl = self && self->stats_ ? self->stats_->level : 1;
+    auto ab = self ? self->activeBot() : nullptr;
+    BotStats* st = ab ? &ab->getStats() : (self ? self->stats_ : nullptr);
+    int lvl = st ? st->level : 1;
     lua_pushinteger(L, lvl);
     return 1;
 }
@@ -3326,7 +3450,9 @@ int LuaEngine::botGetGems(lua_State* L) {
     lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
     LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
-    int gems = self && self->stats_ ? self->stats_->gems : 0;
+    auto ab = self ? self->activeBot() : nullptr;
+    BotStats* st = ab ? &ab->getStats() : (self ? self->stats_ : nullptr);
+    int gems = st ? st->gems : 0;
     lua_pushinteger(L, gems);
     return 1;
 }
@@ -3338,7 +3464,7 @@ int LuaEngine::botWrenchPlayer(lua_State* L) {
     if (!self) return 0;
     int base = lua_isuserdata(L, 1) || lua_istable(L, 1) ? 2 : 1;
     int net_id = static_cast<int>(luaL_checkinteger(L, base));
-    self->actions_.wrenchPlayer(net_id);
+    self->activeActions().wrenchPlayer(net_id);
     return 0;
 }
 

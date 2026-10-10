@@ -595,6 +595,25 @@ Tab **Executor** (`[ </> Executor ]`) mereplikasi 100% tata letak visual, fungsi
 - **Integrasi Lua Engine C API (`addBot`)**:
   - `LuaEngine` mengekspos fungsi global `addBot(info)` yang menerima tabel kamus konfigurasi bot (`display`, `secret`, `name`, `mac`, `rid`, `wk`, `world`, dll.) dan secara otomatis mendaftarkan serta mengonfigurasi instance bot baru ke dalam `BotManager`.
 
+### 11. Arsitektur Threading & Deadlock Prevention pada LuaEngine & Hooks
+- **Latar Belakang Masalah**:
+  - Pada skrip otomasi berdurasi panjang atau *infinite loop* (misal: `while true do ... Sleep(2500) ... end` seperti skrip AFK), pemanggilan `luaL_dostring()` di worker thread sebelumnya mengunci `lua_mtx_` secara terus menerus selama skrip berjalan.
+  - Saat paket jaringan GTPS (seperti `PACKET_CALL_FUNCTION` / VariantList, Tank Update, Ping) diterima oleh thread ENet, fungsi *dispatcher* hook (seperti `triggerOnVariant`) mencoba mengakuisisi `std::lock_guard<std::recursive_mutex> lock(lua_mtx_)`.
+  - Hal ini memicu **deadlock total**: thread ENet terkunci membeku menunggu worker thread Lua, loop polling jaringan berhenti, server menganggap bot *timeout*, dan thread antarmuka grafis (GUI) menjadi *Not Responding* / macet (*hang*).
+- **Solusi Rekayasa & Arsitektur Baru**:
+  1. **Temporary Mutex Yielding saat `Sleep()`**:
+     - Di dalam `LuaEngine::luaSleep()`, worker thread melepaskan kepemilikan lock (`worker_lock_->unlock()`) sebelum masuk ke `std::this_thread::sleep_for()`.
+     - Selama durasi tidur (yang mencakup 99% dari waktu kerja skrip bot), thread jaringan ENet dapat secara instan mengakuisisi `lua_mtx_` untuk mengeksekusi hook callback.
+     - Saat waktu tidur selesai, `luaSleep()` mengunci kembali mutex (`worker_lock_->lock()`) sebelum mengembalikan kendali ke bytecode Lua.
+  2. **Non-Blocking Hook Dispatchers (`std::try_to_lock`)**:
+     - Semua dispatcher event hook (`triggerOnVariant`, `triggerOnSendPacket`, `triggerOnSendPacketRaw`, `triggerOnProcessTankUpdate`, `triggerOnWorldTouch`) beralih dari blocking `std::lock_guard` ke `std::unique_lock<std::recursive_mutex> lock(lua_mtx_, std::try_to_lock)`.
+     - Jika worker thread sedang aktif memproses instruksi Lua mikro (sepersekian mikrodetik), thread jaringan tidak akan pernah tertahan (*zero blocking*).
+  3. **Granular Per-Event Atomic Hook Counters**:
+     - Sistem menyediakan atomic counter spesifik: `hook_variant_count_`, `hook_send_packet_count_`, `hook_send_raw_count_`, `hook_tank_update_count_`, `hook_world_touch_count_`, `hook_draw_count_`, `hook_input_count_`.
+     - Jika sebuah event tidak memiliki hook yang terdaftar (misal: skrip hanya memasang hook `OnSendPacket`), fungsi `triggerOnVariant` langsung mengembalikan `false` di baris pertama (*zero CPU cycle, zero mutex overhead*).
+  4. **Normalisasi Nama Hook Case-Insensitive (`normalizeHookName`)**:
+     - Penulisan nama hook dalam berbagai variasi huruf kapital (misal: `"onsendpacket"`, `"OnSendPacket"`, `"onvariant"`) otomatis dinormalisasi ke format kanonikal PascalCase yang dipahami oleh seluruh subsistem.
+
 
 
 
