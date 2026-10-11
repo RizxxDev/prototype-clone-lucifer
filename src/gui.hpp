@@ -10,12 +10,14 @@
 #include <d3d11.h>
 #include <string>
 #include <vector>
+#include <deque>
 #include <atomic>
 #include <memory>
 #include <functional>
 #include "socks5.hpp"
 #include "bot_stats.hpp"
 #include "console_entry.hpp"
+#include "item_database.hpp"
 
 class EnetClient;
 class WorldState;
@@ -199,12 +201,21 @@ public:
     bool win_console_visible_ = true;
     char executor_status_msg_[128] = "";
     std::string fallback_last_dialog_;
-    std::vector<std::string> executor_logs_;
+    // Ganti vector dengan deque: pop_front O(1) vs erase-from-front O(N)
+    std::deque<std::string> executor_logs_;
     mutable std::mutex executor_logs_mtx_;
     bool executor_auto_scroll_ = true;
     void addExecutorLog(const std::string& msg);
     void clearExecutorLogs();
     LuaEngine& getActiveExecutorEngine();
+
+    // Cache daftar bot agar tidak lock setiap sub-fungsi render di satu frame
+    std::vector<std::shared_ptr<class BotInstance>> cached_bots_;
+    void refreshBotCache(); // Dipanggil 1x di awal setiap frame render
+
+    // Cache item database search (hanya rebuild saat filter berubah)
+    char db_search_cache_buf_[64] = "";
+    std::vector<ItemInfo> db_search_cache_;
 
     // Console & Log Buffers
     char log_filter_[128] = "";
@@ -217,7 +228,7 @@ public:
     int console_filter_ = 0; // 0: All, 1: World, 2: Private, 3: System
     char console_chat_input_[256] = "";
     mutable std::mutex fallback_console_mtx_;
-    std::vector<ConsoleEntry> fallback_console_entries_;
+    std::deque<ConsoleEntry> fallback_console_entries_;
 
     // Active Navigation Tabs
     LuciferTopTab current_top_tab_ = LuciferTopTab::Bots;

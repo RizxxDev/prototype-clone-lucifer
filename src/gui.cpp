@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
+#include <deque>
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
@@ -392,6 +393,9 @@ void LuciferGui::renderMainLayout() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 6.0f));
 
     if (ImGui::Begin("LuciferMainWindow", nullptr, window_flags)) {
+        // Cache bot list once per frame — semua sub-render pakai cached_bots_
+        refreshBotCache();
+
         renderTitleBar();
         renderTopNav();
 
@@ -629,11 +633,8 @@ void LuciferGui::renderSidebar(float width, float height) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.025f, 0.055f, 0.090f, 1.0f));
     ImGui::BeginChild("BotListBox", ImVec2(0, list_box_h), true);
 
-    std::vector<std::shared_ptr<BotInstance>> bots;
-    if (bot_manager_) {
-        bots = bot_manager_->getBots();
-    }
-    if (selected_bot_id_ <= 0 && !bots.empty()) {
+    const auto& bots = cached_bots_;
+    if (selected_bot_id_ <= 0 && !bots.empty() && bots[0]) {
         selected_bot_id_ = bots[0]->getId();
     }
 
@@ -1076,10 +1077,7 @@ void LuciferGui::renderTabList() {
     if (table_h < 120.0f) table_h = 120.0f;
 
     // Kumpulkan daftar bot dan statistik
-    std::vector<std::shared_ptr<BotInstance>> bots;
-    if (bot_manager_) {
-        bots = bot_manager_->getBots();
-    }
+    const auto& bots = cached_bots_;
 
     int online_count = 0;
     int offline_count = 0;
@@ -1192,8 +1190,9 @@ void LuciferGui::renderTabList() {
 
                 // ID
                 ImGui::TableSetColumnIndex(0);
-                std::string row_id = std::to_string(b->getId()) + "##row_" + std::to_string(b->getId());
-                if (ImGui::Selectable(row_id.c_str(), is_selected, ImGuiSelectableFlags_SpanAllColumns)) {
+                char row_id[32];
+                std::snprintf(row_id, sizeof(row_id), "%d##row_%d", b->getId(), b->getId());
+                if (ImGui::Selectable(row_id, is_selected, ImGuiSelectableFlags_SpanAllColumns)) {
                     selected_bot_id_ = b->getId();
                 }
 
@@ -1299,17 +1298,20 @@ void LuciferGui::renderTabList() {
 }
 
 void LuciferGui::addExecutorLog(const std::string& msg) {
-    std::lock_guard<std::mutex> lock(executor_logs_mtx_);
-    if (executor_logs_.size() > 500) {
-        executor_logs_.erase(executor_logs_.begin(), executor_logs_.begin() + 50);
-    }
     auto now = std::chrono::system_clock::now();
     auto tt = std::chrono::system_clock::to_time_t(now);
     std::tm tm_buf{};
     localtime_s(&tm_buf, &tt);
     char time_str[32];
     std::strftime(time_str, sizeof(time_str), "[%H:%M:%S] ", &tm_buf);
-    executor_logs_.push_back(std::string(time_str) + msg);
+    std::string entry = std::string(time_str) + msg;
+
+    std::lock_guard<std::mutex> lock(executor_logs_mtx_);
+    executor_logs_.push_back(std::move(entry));
+    // O(1) pop_front alih-alih erase O(N)
+    while (executor_logs_.size() > 500) {
+        executor_logs_.pop_front();
+    }
 }
 
 void LuciferGui::clearExecutorLogs() {
@@ -1317,15 +1319,29 @@ void LuciferGui::clearExecutorLogs() {
     executor_logs_.clear();
 }
 
+// ---------------------------------------------------------------------------
+// refreshBotCache — dipanggil SEKALI per frame di awal renderMainLayout agar
+// semua sub-render function tidak perlu lock mutex BotManager berulang kali.
+// ---------------------------------------------------------------------------
+void LuciferGui::refreshBotCache() {
+    if (bot_manager_) {
+        cached_bots_ = bot_manager_->getBots();
+    } else {
+        cached_bots_.clear();
+    }
+}
+
 LuaEngine& LuciferGui::getActiveExecutorEngine() {
     if (bot_manager_) {
         if (selected_bot_id_ > 0) {
-            auto b = bot_manager_->getBotById(selected_bot_id_);
-            if (b) return b->getLuaEngine();
+            for (const auto& b : cached_bots_) {
+                if (b && b->getId() == selected_bot_id_) {
+                    return b->getLuaEngine();
+                }
+            }
         }
-        auto bots = bot_manager_->getBots();
-        if (!bots.empty() && bots[0]) {
-            return bots[0]->getLuaEngine();
+        if (!cached_bots_.empty() && cached_bots_[0]) {
+            return cached_bots_[0]->getLuaEngine();
         }
     }
     lua_engine_.setTargetBotId(selected_bot_id_);
@@ -1345,15 +1361,19 @@ void LuciferGui::renderTabExecutor() {
     float editor_h = avail_h - top_bar_h - bottom_bar_h - console_h - 24.0f;
     if (editor_h < 120.0f) editor_h = 120.0f;
 
-    // Kumpulkan bot yang tersedia
+    // Kumpulkan bot yang tersedia dari cached_bots_
     std::shared_ptr<BotInstance> current_bot = nullptr;
-    std::vector<std::shared_ptr<BotInstance>> bots;
+    const auto& bots = cached_bots_;
     if (bot_manager_) {
-        bots = bot_manager_->getBots();
         if (selected_bot_id_ > 0) {
-            current_bot = bot_manager_->getBotById(selected_bot_id_);
+            for (const auto& b : bots) {
+                if (b && b->getId() == selected_bot_id_) {
+                    current_bot = b;
+                    break;
+                }
+            }
         }
-        if (!current_bot && !bots.empty()) {
+        if (!current_bot && !bots.empty() && bots[0]) {
             current_bot = bots[0];
             selected_bot_id_ = current_bot->getId();
         }
@@ -1877,7 +1897,7 @@ void LuciferGui::renderTabProxy() {
     ImGui::Spacing();
 
     if (bot_manager_) {
-        auto bots = bot_manager_->getBots();
+        const auto& bots = cached_bots_;
         if (ImGui::BeginTable("ProxyStatusTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
             ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 40.0f);
             ImGui::TableSetupColumn("Akun", ImGuiTableColumnFlags_WidthFixed, 110.0f);
@@ -1912,9 +1932,8 @@ void LuciferGui::renderTabProxy() {
                 }
 
                 ImGui::TableSetColumnIndex(4);
-                std::string btn_test = "Uji##pt_" + std::to_string(b->getId());
-                std::string btn_clear = "Direct##pc_" + std::to_string(b->getId());
-                if (ImGui::SmallButton(btn_test.c_str())) {
+                ImGui::PushID(b->getId());
+                if (ImGui::SmallButton("Uji")) {
                     if (b->getProxy().enabled) {
                         std::string res;
                         Socks5Client::testProxy(b->getProxy(), res);
@@ -1922,11 +1941,12 @@ void LuciferGui::renderTabProxy() {
                     }
                 }
                 ImGui::SameLine();
-                if (ImGui::SmallButton(btn_clear.c_str())) {
+                if (ImGui::SmallButton("Direct")) {
                     Socks5Config none;
                     b->setProxy(none);
                     bot_manager_->saveAccountsToFile(accounts_file_path_);
                 }
+                ImGui::PopID();
             }
             ImGui::EndTable();
         }
@@ -1985,13 +2005,21 @@ void LuciferGui::renderTabDatabase() {
     ImGui::SetNextItemWidth(300.0f);
     ImGui::InputTextWithHint("##ItemSearch", "Search item name or ID...", search_item, sizeof(search_item));
     ImGui::SameLine();
-    if (ImGui::Button("🔄 Reload cache/items.dat")) {
+    if (ImGui::Button("\xf0\x9f\x94\x84 Reload cache/items.dat")) {
         db.loadFromFile("cache/items.dat");
+        // Paksa rebuild cache setelah reload
+        db_search_cache_buf_[0] = '\1'; // invalidate
     }
 
     ImGui::Spacing();
 
-    auto matched = db.findItems(search_item, 500);
+    // Rebuild hanya saat filter berubah, bukan tiap frame
+    if (std::strcmp(db_search_cache_buf_, search_item) != 0) {
+        db_search_cache_ = db.findItems(search_item, 500);
+        std::strncpy(db_search_cache_buf_, search_item, sizeof(db_search_cache_buf_) - 1);
+        db_search_cache_buf_[sizeof(db_search_cache_buf_) - 1] = '\0';
+    }
+    const auto& matched = db_search_cache_;
 
     if (ImGui::BeginTable("ItemDbTable", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
         ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 60.0f);
@@ -2135,16 +2163,25 @@ void LuciferGui::addFallbackConsoleMessage(ConsoleMsgType type, const std::strin
     entry.timestamp = buf;
     entry.text = msg;
     fallback_console_entries_.push_back(std::move(entry));
-    if (fallback_console_entries_.size() > 500) {
-        fallback_console_entries_.erase(fallback_console_entries_.begin(), fallback_console_entries_.begin() + 50);
+    while (fallback_console_entries_.size() > 500) {
+        fallback_console_entries_.pop_front();
     }
 }
 
 void LuciferGui::renderSubTabConsole() {
-    std::shared_ptr<BotInstance> bot = (bot_manager_ && selected_bot_id_ > 0)
-        ? bot_manager_->getBotById(selected_bot_id_) : nullptr;
-    if (!bot && bot_manager_ && !bot_manager_->getBots().empty()) {
-        bot = bot_manager_->getBots().front();
+    std::shared_ptr<BotInstance> bot = nullptr;
+    if (bot_manager_) {
+        if (selected_bot_id_ > 0) {
+            for (const auto& b : cached_bots_) {
+                if (b && b->getId() == selected_bot_id_) {
+                    bot = b;
+                    break;
+                }
+            }
+        }
+        if (!bot && !cached_bots_.empty()) {
+            bot = cached_bots_.front();
+        }
     }
 
     // 1. Top Control Bar: [Enable] (switch) | [Show Timestamps] (switch) | [Auto Scroll] (switch)
@@ -2244,13 +2281,17 @@ void LuciferGui::renderSubTabConsole() {
 
     ImGui::BeginChild("LuciferConsoleTerminal", ImVec2(0, term_h), true, ImGuiWindowFlags_HorizontalScrollbar);
 
-    std::vector<ConsoleEntry> entries;
+    // getConsoleSnapshot(): zero-copy jika tidak ada pesan baru (dirty=false)
+    const std::vector<ConsoleEntry>* entries_ptr = nullptr;
+    std::vector<ConsoleEntry> fallback_snap;
     if (bot) {
-        entries = bot->getConsoleMessages();
+        entries_ptr = &bot->getConsoleSnapshot();
     } else {
         std::lock_guard<std::mutex> lock(fallback_console_mtx_);
-        entries = fallback_console_entries_;
+        fallback_snap.assign(fallback_console_entries_.begin(), fallback_console_entries_.end());
+        entries_ptr = &fallback_snap;
     }
+    const std::vector<ConsoleEntry>& entries = *entries_ptr;
 
     if (entries.empty()) {
         ImGui::TextDisabled("Console ready. Waiting for bot connection/messages...");
@@ -2290,8 +2331,10 @@ void LuciferGui::renderSubTabConsole() {
 
             if (console_show_timestamps_) {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.70f, 0.70f, 0.75f, 1.0f));
-                std::string ts = "[" + entry.timestamp + "] ";
-                ImGui::TextUnformatted(ts.c_str());
+                // Format langsung tanpa string allocation
+                char ts_buf[16];
+                std::snprintf(ts_buf, sizeof(ts_buf), "[%s] ", entry.timestamp.c_str());
+                ImGui::TextUnformatted(ts_buf);
                 ImGui::PopStyleColor();
                 ImGui::SameLine(0, 0);
             } else {
@@ -2904,7 +2947,7 @@ void LuciferGui::renderTabMultiBot() {
     ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "📋 DAFTAR BOT DI THREAD POOL");
     ImGui::Separator();
 
-    auto bots = bot_manager_->getBots();
+    const auto& bots = cached_bots_;
     if (ImGui::BeginTable("MultiBotTable", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
         ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 40.0f);
         ImGui::TableSetupColumn("GrowID", ImGuiTableColumnFlags_WidthFixed, 110.0f);
@@ -2943,27 +2986,24 @@ void LuciferGui::renderTabMultiBot() {
             ImGui::Text("%s", b->getProxy().enabled ? b->getProxy().toString().c_str() : "Direct");
 
             ImGui::TableSetColumnIndex(5);
-            std::string start_lbl = "Start##" + std::to_string(b->getId());
-            std::string stop_lbl = "Stop##" + std::to_string(b->getId());
-            std::string sel_lbl = "Pilih##" + std::to_string(b->getId());
-            std::string del_lbl = "X##" + std::to_string(b->getId());
-
-            if (ImGui::SmallButton(start_lbl.c_str())) {
+            ImGui::PushID(b->getId());
+            if (ImGui::SmallButton("Start")) {
                 b->start();
             }
             ImGui::SameLine();
-            if (ImGui::SmallButton(stop_lbl.c_str())) {
+            if (ImGui::SmallButton("Stop")) {
                 b->stop();
             }
             ImGui::SameLine();
-            if (ImGui::SmallButton(sel_lbl.c_str())) {
+            if (ImGui::SmallButton("Pilih")) {
                 selected_bot_id_ = b->getId();
             }
             ImGui::SameLine();
-            if (ImGui::SmallButton(del_lbl.c_str())) {
+            if (ImGui::SmallButton("X")) {
                 bot_manager_->removeBot(b->getId());
                 bot_manager_->saveAccountsToFile(accounts_file_path_);
             }
+            ImGui::PopID();
         }
         ImGui::EndTable();
     }

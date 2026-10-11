@@ -7,6 +7,7 @@
 #include <cstring>
 #include <chrono>
 #include <thread>
+#include <deque>
 
 BotInstance::BotInstance(int id,
                          const std::string& account_name,
@@ -48,6 +49,10 @@ BotInstance::BotInstance(int id,
 }
 
 BotInstance::~BotInstance() {
+    if (ip_fetch_state_) {
+        std::lock_guard<std::mutex> lock(ip_fetch_state_->mtx);
+        ip_fetch_state_->cancelled = true;
+    }
     stop();
     stats_.stopSession();
     stats_.saveToFile(account_name_);
@@ -96,33 +101,59 @@ static std::string getFormattedConsoleTimestamp() {
 
 void BotInstance::addConsoleMessage(ConsoleMsgType type, const std::string& msg) {
     if (msg.empty()) return;
-    std::lock_guard<std::mutex> lock(console_mtx_);
     ConsoleEntry entry;
     entry.type = type;
     entry.timestamp = getFormattedConsoleTimestamp();
     entry.text = msg;
-    console_entries_.push_back(std::move(entry));
-    if (console_entries_.size() > 500) {
-        console_entries_.erase(console_entries_.begin(), console_entries_.begin() + 50);
+    {
+        std::lock_guard<std::mutex> lock(console_mtx_);
+        console_entries_.push_back(std::move(entry));
+        // Batasi dengan pop_front O(1) alih-alih erase O(N)
+        while (console_entries_.size() > 500) {
+            console_entries_.pop_front();
+        }
     }
+    console_dirty_.store(true, std::memory_order_release);
 }
 
-std::vector<ConsoleEntry> BotInstance::getConsoleMessages() const {
-    std::lock_guard<std::mutex> lock(console_mtx_);
-    return console_entries_;
+const std::vector<ConsoleEntry>& BotInstance::getConsoleSnapshot() {
+    // Hanya rebuild snapshot jika ada pesan baru (dirty flag)
+    if (console_dirty_.load(std::memory_order_acquire)) {
+        std::lock_guard<std::mutex> lock(console_mtx_);
+        console_snapshot_.assign(console_entries_.begin(), console_entries_.end());
+        console_dirty_.store(false, std::memory_order_release);
+    }
+    return console_snapshot_;
 }
 
 void BotInstance::clearConsoleMessages() {
-    std::lock_guard<std::mutex> lock(console_mtx_);
-    console_entries_.clear();
+    {
+        std::lock_guard<std::mutex> lock(console_mtx_);
+        console_entries_.clear();
+        console_snapshot_.clear();
+    }
+    console_dirty_.store(false, std::memory_order_release);
+}
+
+void BotInstance::setServerReportedIp(const std::string& ip) {
+    std::lock_guard<std::mutex> lock(ip_mtx_);
+    server_reported_ip_ = ip;
+}
+
+std::string BotInstance::getServerReportedIp() const {
+    std::lock_guard<std::mutex> lock(ip_mtx_);
+    return server_reported_ip_;
 }
 
 std::string BotInstance::getEffectiveIp() const {
-    if (!server_reported_ip_.empty()) {
-        return server_reported_ip_;
-    }
-    if (!detected_ip_.empty()) {
-        return detected_ip_;
+    {
+        std::lock_guard<std::mutex> lock(ip_mtx_);
+        if (!server_reported_ip_.empty()) {
+            return server_reported_ip_;
+        }
+        if (!detected_ip_.empty()) {
+            return detected_ip_;
+        }
     }
     if (proxy_.isValid() && !proxy_.host.empty()) {
         return proxy_.host;
@@ -132,11 +163,19 @@ std::string BotInstance::getEffectiveIp() const {
 
 void BotInstance::refreshPublicIpAsync() {
     Socks5Config p = proxy_;
-    std::thread([this, p]() {
+    int id = id_;
+    auto state = ip_fetch_state_;
+    std::thread([this, state, p, id]() {
         std::string ip = HttpClient::fetchPublicIp(p);
         if (!ip.empty()) {
-            detected_ip_ = ip;
-            Logger::log("[BOT #", id_, "] 🌐 IP publik aktif terdeteksi: ", ip);
+            std::lock_guard<std::mutex> cancel_lock(state->mtx);
+            if (!state->cancelled) {
+                {
+                    std::lock_guard<std::mutex> lock(ip_mtx_);
+                    detected_ip_ = ip;
+                }
+                Logger::log("[BOT #", id, "] 🌐 IP publik aktif terdeteksi: ", ip);
+            }
         }
     }).detach();
 }
@@ -727,7 +766,7 @@ void BotInstance::setupPacketHandlers() {
                                 clean.find("Logged in") != std::string::npos) {
                                 std::string ip = extractIpFromText(clean);
                                 if (!ip.empty()) {
-                                    server_reported_ip_ = ip;
+                                    setServerReportedIp(ip);
                                     Logger::log("[BOT #", id_, "] 🌐 IP terkonfirmasi dari OnConsoleMessage: ", ip);
                                 }
                             }

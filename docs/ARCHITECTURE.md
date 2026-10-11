@@ -618,3 +618,24 @@ Tab **Executor** (`[ </> Executor ]`) mereplikasi 100% tata letak visual, fungsi
 
 
 
+
+
+### 12. Optimasi Kinerja, Zero-Allocation Rendering, & Pencegahan Crash Multi-Thread
+- **Pencegahan Crash Eksekusi Ganda Skrip (`runScript` 2x)**:
+  - **Akar Masalah**: Meng-assign objek `worker_ = std::thread(...)` ketika worker thread sebelumnya masih `.joinable()` (meskipun `is_running_` sudah false) melanggar standar C++ dan memicu pemanggilan `std::terminate()` seketika.
+  - **Solusi**: `LuaEngine::runScript()` selalu memanggil `stopScript()` di awal, memastikan worker thread lama di-join atau di-detach dengan aman sebelum thread baru dibuat.
+- **Optimasi In-Game Console & Executor Logs (O(1) Pop & Dirty Flag)**:
+  - **Migrasi Struktur Data**: `console_entries_`, `executor_logs_`, dan `fallback_console_entries_` dimigrasikan dari `std::vector` (dengan operasi `erase(begin())` bernilai O(N) saat batas 500 entri terlampaui) ke `std::deque` yang beroperasi dalam O(1) amortized `pop_front()`.
+  - **Snapshot Cache & Dirty Flag**: `BotInstance` mengimplementasikan `console_dirty_` (atomic flag). Fungsi `getConsoleSnapshot()` hanya membangun ulang cache saat pesan baru masuk, mengeliminasi full-vector copy dari 500 pesan di setiap frame render (60 FPS).
+- **Per-Frame Bot Caching (`cached_bots_`)**:
+  - Di awal setiap frame (`renderMainLayout()`), fungsi `refreshBotCache()` mengambil daftar bot sekali saja ke dalam `cached_bots_`.
+  - Semua sub-fungsi perenderan (`renderSidebar`, `renderTabList`, `renderTabExecutor`, `renderTabProxy`, `renderSubTabConsole`, `MultiBotTable`) membaca referensi `cached_bots_`, menghilangkan pembacaan berulang dan perebutan mutex `BotManager` puluhan kali per frame.
+- **Zero-Heap Allocation pada Tabel ImGui**:
+  - Mengganti alokasi `std::string` dinamis untuk label ID tombol (`"Start##" + to_string(id)`) dengan `ImGui::PushID(bot_id)` dan tombol statis (`"Start"`, `"Stop"`, `"Pilih"`, `"X"`, `"Uji"`, `"Direct"`).
+  - Mengganti pembentukan string `row_id` dan timestamp dengan stack buffer `char buf[N]` dan `std::snprintf`, mengeliminasi puluhan ribu alokasi heap per detik pada multi-bot render loop.
+- **Item Database Query Caching**:
+  - Pemanggilan `db.findItems(search_item, 500)` di `renderTabDatabase()` dilindungi oleh buffer perbandingan `db_search_cache_buf_`. Pencarian hanya dieksekusi saat string pencarian pengguna berubah, bukan setiap frame 16ms.
+- **Thread-Safety & Lifecycle Protection Deteksi IP Publik**:
+  - `BotInstance::refreshPublicIpAsync()` dilindungi dengan struktur `IpFetchState` berbasis `std::shared_ptr`.
+  - Jika `BotInstance` dihancurkan saat background HTTP request masih berlangsung, destruktor menandai `cancelled = true`, mencegah thread detached mengakses memori `this` yang sudah bebas (*use-after-free mitigation*).
+  - Variabel `detected_ip_` dan `server_reported_ip_` disinkronkan menggunakan `ip_mtx_`.

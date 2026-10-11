@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <deque>
 #include <memory>
 #include <atomic>
 #include <mutex>
@@ -71,8 +72,8 @@ public:
     // Deteksi IP Terbaca di Game
     std::string getEffectiveIp() const;
     void refreshPublicIpAsync();
-    void setServerReportedIp(const std::string& ip) { server_reported_ip_ = ip; }
-    std::string getServerReportedIp() const { return server_reported_ip_; }
+    void setServerReportedIp(const std::string& ip);
+    std::string getServerReportedIp() const;
 
     // Statistik Pemain (Level, Gems, Played, Age)
     BotStats& getStats() { return stats_; }
@@ -81,7 +82,8 @@ public:
 
     // In-Game Console Messages (Lucifer v2.85)
     void addConsoleMessage(ConsoleMsgType type, const std::string& msg);
-    std::vector<ConsoleEntry> getConsoleMessages() const;
+    // Snapshot hanya diperbarui saat ada pesan baru (dirty flag)
+    const std::vector<ConsoleEntry>& getConsoleSnapshot();
     void clearConsoleMessages();
 
     // Dialog Inspector (Lucifer v2.85)
@@ -138,7 +140,13 @@ private:
     std::string cached_server_ip_;
     int cached_server_port_ = 0;
 
-    mutable std::string detected_ip_;
+    struct IpFetchState {
+        std::mutex mtx;
+        bool cancelled{false};
+    };
+    std::shared_ptr<IpFetchState> ip_fetch_state_ = std::make_shared<IpFetchState>();
+    mutable std::mutex ip_mtx_;
+    std::string detected_ip_;
     std::string server_reported_ip_;
     BotStats stats_;
     std::chrono::steady_clock::time_point last_stats_save_{};
@@ -148,7 +156,10 @@ private:
     std::string status_string_ = "Offline";
 
     mutable std::mutex console_mtx_;
-    std::vector<ConsoleEntry> console_entries_;
+    std::deque<ConsoleEntry> console_entries_;
+    // Snapshot cache agar GUI tidak melakukan full-copy tiap frame
+    std::vector<ConsoleEntry> console_snapshot_;
+    std::atomic<bool> console_dirty_{false};
 
     mutable std::mutex dialog_mtx_;
     std::string last_dialog_;
