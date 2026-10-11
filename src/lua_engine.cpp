@@ -1674,6 +1674,8 @@ int LuaEngine::bothaxGetObjectList(lua_State* L) {
         lua_newtable(L);
         lua_pushinteger(L, items[i].id);
         lua_setfield(L, -2, "id");
+        lua_pushinteger(L, items[i].id);
+        lua_setfield(L, -2, "itemid"); // Alias untuk Lucifer / Bothax
 
         lua_newtable(L);
         lua_pushnumber(L, items[i].x);
@@ -1684,10 +1686,16 @@ int LuaEngine::bothaxGetObjectList(lua_State* L) {
 
         lua_pushinteger(L, items[i].count);
         lua_setfield(L, -2, "amount");
+        lua_pushinteger(L, items[i].count);
+        lua_setfield(L, -2, "count"); // Alias untuk Lucifer / Bothax
+
         lua_pushinteger(L, 0);
         lua_setfield(L, -2, "flags");
+
         lua_pushinteger(L, items[i].uid);
         lua_setfield(L, -2, "oid");
+        lua_pushinteger(L, items[i].uid);
+        lua_setfield(L, -2, "uid"); // Alias untuk Lucifer / Bothax
 
         lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
     }
@@ -3221,26 +3229,54 @@ int LuaEngine::botCollect(lua_State* L) {
     lua_pop(L, 1);
     if (!self) return 0;
 
-    int base = lua_isuserdata(L, 1) || lua_istable(L, 1) ? 2 : 1;
+    int base = (lua_isuserdata(L, 1) || (lua_istable(L, 1) && !lua_isnoneornil(L, 2))) ? 2 : 1;
     if (lua_isnoneornil(L, base)) {
         int collected = self->activeActions().collectNearby(4.0f);
         lua_pushinteger(L, collected);
         return 1;
     }
 
+    // Jika objek table dilewatkan (misal Collect(obj))
+    if (lua_istable(L, base)) {
+        int target_uid = -1;
+        lua_getfield(L, base, "oid");
+        if (lua_isnumber(L, -1)) {
+            target_uid = static_cast<int>(lua_tointeger(L, -1));
+        } else {
+            lua_pop(L, 1);
+            lua_getfield(L, base, "uid");
+            if (lua_isnumber(L, -1)) {
+                target_uid = static_cast<int>(lua_tointeger(L, -1));
+            }
+        }
+        lua_pop(L, 1);
+
+        if (target_uid >= 0) {
+            self->activeActions().collect(target_uid);
+            lua_pushinteger(L, 1);
+            return 1;
+        }
+    }
+
     if (lua_isinteger(L, base)) {
-        int uid = static_cast<int>(lua_tointeger(L, base));
+        int val = static_cast<int>(lua_tointeger(L, base));
         auto dropped = self->activeWorld().getDroppedItems();
         bool is_uid = false;
         for (const auto& d : dropped) {
-            if (static_cast<int>(d.uid) == uid) {
+            if (static_cast<int>(d.uid) == val) {
                 is_uid = true;
                 break;
             }
         }
-        if (is_uid || uid > 50) {
-            self->activeActions().collect(uid);
+
+        bool has_second_arg = !lua_isnoneornil(L, base + 1);
+        if (is_uid || has_second_arg || val > 30) {
+            self->activeActions().collect(val);
             lua_pushinteger(L, 1);
+            return 1;
+        } else {
+            int collected = self->activeActions().collectNearby(static_cast<float>(val));
+            lua_pushinteger(L, collected);
             return 1;
         }
     }

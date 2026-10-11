@@ -225,6 +225,20 @@ void WorldState::removeDroppedItem(uint32_t uid) {
     );
 }
 
+void WorldState::removeDroppedItemByPos(float x, float y, float tolerance) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    float tol_sq = tolerance * tolerance;
+    dropped_items_.erase(
+        std::remove_if(dropped_items_.begin(), dropped_items_.end(),
+                       [x, y, tol_sq](const DroppedItem& item) {
+                           float dx = item.x - x;
+                           float dy = item.y - y;
+                           return (dx * dx + dy * dy) <= tol_sq;
+                       }),
+        dropped_items_.end()
+    );
+}
+
 void WorldState::setLocalPos(float x, float y) {
     std::lock_guard<std::mutex> lock(mtx_);
     local_player_.x = x;

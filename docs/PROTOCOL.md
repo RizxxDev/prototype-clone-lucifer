@@ -257,3 +257,34 @@ end_dialog|profile|Continue||
   buttonClicked|
   ```
 
+---
+
+## 9. Protokol Dropped Item & Auto Pickup / Collect
+
+### A. Broadcast Pemunculan & Pengambilan Item (Server ke Bot)
+Server GTPS menyiarkan pembaruan item terapung di world melalui Tank Packet:
+- **Tipe Paket**: `PACKET_ITEM_CHANGE_OBJECT` (`8`) atau variasi event server (`14`).
+- **Ketika Item Jatuh / Muncul Baru**:
+  - `net_id`: UID objek yang dialokasikan server (atau `-1` pada beberapa GTPS non-resmi).
+  - `target_net_id` / `main_data`: Item ID atau UID sekunder.
+  - `count1`: Jumlah item yang jatuh.
+  - `pos_x`, `pos_y`: Koordinat piksel item mengambang di world.
+  - *Gotcha GTPS*: Jika server mengirim `net_id = -1`, bot membangkitkan UID fallback unik (`atomic<uint32_t>`) agar item tidak saling menimpa dalam `WorldState`.
+- **Ketika Item Terambil / Menghilang**:
+  - Disiarkan dengan kondisi `count1 == 0` atau item broadcast penghapusan.
+  - Bot menghapus item dari memori lokal berdasarkan UID dan mencocokkan radius koordinat piksel terdekat (`removeDroppedItemByPos`).
+
+### B. Paket Pengambilan Item Klien (Bot ke Server)
+Klien resmi Growtopia dan Lucifer mengambil dropped item bukan dengan mengirim Tank Packet 8, melainkan:
+- **Tipe Paket**: `PACKET_ITEM_ACTIVATE_OBJECT_REQUEST` (Tank Packet Type `11` / `0x0B`).
+- **Struktur Field Kritis**:
+  - `pkt.type = PACKET_ITEM_ACTIVATE_OBJECT_REQUEST` (`11`)
+  - `pkt.net_id = object_uid`
+  - `pkt.target_net_id = object_uid`
+  - `pkt.main_data = object_uid`
+  - `pkt.pos_x = player_pos_x`, `pkt.pos_y = player_pos_y` (koordinat piksel posisi berdiri bot saat mengambil)
+- **Kompatibilitas Lua**:
+  - `Collect(oid)`: Mengirim paket aktivasi pengambilan untuk UID objek spesifik.
+  - `Collect(obj)`: Menerima langsung tabel `WorldObject` dari `GetObjectList()`, mengekstrak `oid`/`uid`.
+  - `Collect(radius)` / `CollectNearby(radius)`: Memindai item di sekitar bot dalam jangkauan radius tertentu dan mengirim paket pengambilan secara otomatis.
+

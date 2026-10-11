@@ -66,6 +66,7 @@ public:
     void updatePlayerPos(int net_id, float x, float y);
     void addOrUpdateDroppedItem(uint32_t uid, uint16_t id, uint8_t count, float x, float y);
     void removeDroppedItem(uint32_t uid);
+    void removeDroppedItemByPos(float x, float y, float tolerance = 32.0f);
 
     // Local Player
     void setLocalPos(float x, float y);

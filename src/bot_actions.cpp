@@ -136,8 +136,9 @@ void BotActions::collect(int object_uid) {
     int cur_tx = 0, cur_ty = 0;
     world_.getLocalPos(px, py, cur_tx, cur_ty);
 
-    auto pkt = TankPacketHelper::createCollectObject(world_.getLocalNetId(), object_uid, px, py);
+    auto pkt = TankPacketHelper::createCollectObject(object_uid, px, py);
     sendTankPacket(pkt);
+    Logger::log("[ACTION] 🧲 Mengirim paket collect UID=", object_uid, " Pos=(", px, ", ", py, ")");
 }
 
 int BotActions::collectNearby(float radius_tiles) {

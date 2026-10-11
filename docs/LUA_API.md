@@ -92,9 +92,12 @@ Engine ini mendukung:
 ```lua
 {
     id     = 242,                  -- Item ID barang
+    itemid = 242,                  -- Alias itemid (Lucifer/Bothax)
     amount = 5,                    -- Jumlah tumpukan item
+    count  = 5,                    -- Alias count (Lucifer/Bothax)
     flags  = 0,                    -- Object bitflags
     oid    = 18,                   -- Object UID unik (digunakan untuk collect)
+    uid    = 18,                   -- Alias uid (Lucifer/Bothax)
     pos    = { x = 320.0, y = 480.0 } -- Posisi pixel
 }
 ```
@@ -268,13 +271,13 @@ Semua fungsi di bawah ini dapat dipanggil dengan **PascalCase** (standar Bothax)
 | 42 | `IsDarkened(enable)` | `isDarkened` | `void` | Mengatur visual mode gelap di world. |
 | 43 | `NoName(enable)` | `noName` | `void` | Mengaktifkan mode nama anonim pada paket pergerakan bot. |
 | 44 | `inv(item_id)` / `GetItemCount(item_id)` | `getItemCount` | `integer` | Mengambil jumlah item spesifik di dalam tas inventaris bot. |
-| 45 | `Collect([uid_or_radius])` | `collect` | `integer` | Mengambil dropped item di world via paket collect atau radius sekitar. |
+| 45 | `Collect([uid_or_radius_or_obj])` | `collect` | `integer` | Mengambil dropped item via UID (`Collect(oid)`), objek tabel (`Collect(obj)`), atau fallback radius sekitar. |
 | 46 | `CollectNearby([radius])` | `collectNearby` | `integer` | Mengambil semua dropped item dalam jangkauan radius tertentu (default: 4.0 tile). |
 
 #### Utilitas Tambahan
 - `ChangeValue(key, value)` / `changeValue`: Mengubah cheat internal (`modfly`, `noname`, `canseeghost`, `speed`, `punchrange`, `buildrange`, `autoreconnect`).
 - `inv(id)` / `GetItemCount(id)` / `bot:getItemCount(id)` / `bot:inv(id)`: Mengembalikan jumlah item di inventory.
-- `Collect(uid)` / `Collect([radius])` / `bot:collect([uid/radius])`: Mengambil drop item di world.
+- `Collect(oid)` / `Collect(obj)` / `Collect([radius])` / `bot:collect(...)`: Mengambil dropped item di world. Mendukung pengiriman UID langsung, tabel objek `obj` dari `GetObjectList()`, atau radius scan.
 - `GetGameLogic()` / `getGameLogic`: Mengembalikan base pointer logika game (emulasi pointer runtime aman).
 - `GetBaseApp()` / `getBaseApp`: Mengembalikan base pointer aplikasi (emulasi pointer runtime aman).
 

@@ -567,12 +567,28 @@ void BotInstance::setupPacketHandlers() {
                 world_->setWorldName(target_world_);
                 Logger::log("[BOT #", id_, "] 🌍 Map data diterima! Bot berada di world: ", target_world_);
             }
-            // Tank 8: Dropped Item
-            else if (tank_type == PACKET_ITEM_CHANGE_OBJECT && pkt.payload.size() >= sizeof(GameUpdatePacket)) {
+            // Tank 8 (or 14): Dropped Item Event (Spawn / Collect)
+            else if ((tank_type == PACKET_ITEM_CHANGE_OBJECT || tank_type == 14) && pkt.payload.size() >= sizeof(GameUpdatePacket)) {
                 GameUpdatePacket item_pkt;
                 std::memcpy(&item_pkt, pkt.payload.data(), sizeof(GameUpdatePacket));
-                world_->addOrUpdateDroppedItem(item_pkt.net_id, static_cast<uint16_t>(item_pkt.main_data),
-                                              item_pkt.count1, item_pkt.pos_x, item_pkt.pos_y);
+                
+                // Jika net_id >= 0 dan count1 == 0, atau server menyiarkan item terambil/hilang
+                if (item_pkt.net_id >= 0 && item_pkt.count1 == 0) {
+                    uint32_t collected_uid = static_cast<uint32_t>(item_pkt.target_net_id > 0 ? item_pkt.target_net_id : item_pkt.main_data);
+                    world_->removeDroppedItem(collected_uid);
+                    world_->removeDroppedItemByPos(item_pkt.pos_x, item_pkt.pos_y, 24.0f);
+                    Logger::log("[BOT #", id_, "] 💨 Dropped Item terambil/hilang: UID=", collected_uid, " Pos=(", item_pkt.pos_x, ", ", item_pkt.pos_y, ")");
+                } else {
+                    // Item baru jatuh di world
+                    uint32_t uid = static_cast<uint32_t>(item_pkt.target_net_id > 0 ? item_pkt.target_net_id : (item_pkt.net_id > 0 ? item_pkt.net_id : item_pkt.main_data));
+                    uint16_t item_id = static_cast<uint16_t>(item_pkt.main_data > 0 ? item_pkt.main_data : item_pkt.target_net_id);
+                    if (uid == static_cast<uint32_t>(-1) || uid == 0) {
+                        static std::atomic<uint32_t> s_auto_uid{1000};
+                        uid = ++s_auto_uid;
+                    }
+                    world_->addOrUpdateDroppedItem(uid, item_id, item_pkt.count1 > 0 ? item_pkt.count1 : 1, item_pkt.pos_x, item_pkt.pos_y);
+                    Logger::log("[BOT #", id_, "] 📦 Dropped Item baru: ID=", item_id, " UID=", uid, " Count=", (int)item_pkt.count1, " Pos=(", item_pkt.pos_x, ", ", item_pkt.pos_y, ")");
+                }
             }
             // Tank 9: Inventory
             else if (tank_type == PACKET_SEND_INVENTORY_STATE) {
