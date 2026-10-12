@@ -7,6 +7,7 @@
 #include <chrono>
 #include <mutex>
 #include <functional>
+#include <unordered_map>
 
 class EnetClient;
 class WorldState;
@@ -48,6 +49,9 @@ public:
     // Inventory & Item Interaction
     void collect(int object_uid = -1);
     int  collectNearby(float radius_tiles = 4.0f);
+    bool checkPassThroughCollect(float current_x, float current_y);
+    bool collectObject(uint32_t uid, float range_tiles = -1.0f);
+    int  collectByID(uint16_t item_id, float range_tiles = -1.0f);
     void drop(uint16_t item_id, int count);
     void trash(uint16_t item_id, int count);
 
@@ -67,6 +71,9 @@ private:
     WorldState& world_;
     std::mutex say_mtx_;
     std::chrono::steady_clock::time_point last_say_time_{};
+
+    std::mutex collect_mtx_;
+    std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> collect_cooldowns_;
 
     // Flags
     std::atomic<bool> mod_fly_{false};
@@ -95,3 +102,44 @@ private:
     std::atomic<bool> running_{false};
     std::thread worker_;
 };
+
+// ============================================================
+// AutoCollectController: Native C++ Base Auto-Collect System
+// ============================================================
+class AutoCollectController {
+public:
+    AutoCollectController(BotActions& actions, WorldState& world);
+    ~AutoCollectController();
+
+    // Active pathfinding sweeper (menavigasi ke dropped items di world)
+    bool start(uint16_t filter_item_id = 0, int delay_ms = 600, float max_range_tiles = 0.0f);
+    void stop();
+    bool isRunning() const;
+
+    // Konfigurasi Runtime
+    void setFilterItemId(uint16_t id) { filter_item_id_.store(id); }
+    uint16_t getFilterItemId() const { return filter_item_id_.load(); }
+    void setDelayMs(int ms) { delay_ms_.store(ms); }
+    int getDelayMs() const { return delay_ms_.load(); }
+    void setPassiveEnabled(bool en) { passive_enabled_.store(en); }
+    bool isPassiveEnabled() const { return passive_enabled_.load(); }
+
+    // Hitbox pass-through check (otomatis menyerap item saat melangkah/berada dekat)
+    bool triggerPassThroughCollect(float current_x, float current_y);
+
+private:
+    void collectLoop(uint16_t filter_item_id, int delay_ms, float max_range_tiles);
+
+    BotActions& actions_;
+    WorldState& world_;
+    std::atomic<bool> running_{false};
+    std::atomic<bool> passive_enabled_{true}; // Always ON by default as base feature
+    std::atomic<uint16_t> filter_item_id_{0};
+    std::atomic<int> delay_ms_{600};
+    std::thread worker_;
+
+    std::mutex retry_mtx_;
+    std::unordered_map<uint32_t, int> retry_counts_;
+    std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> collect_cooldowns_;
+};
+

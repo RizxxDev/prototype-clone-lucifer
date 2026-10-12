@@ -162,28 +162,276 @@ void WorldState::parseMapData(const uint8_t* extra_data, size_t size) {
             world_name_ = reader.str(name_len);
         }
 
+        uint32_t width = 0, height = 0, tile_count = 0;
+        size_t tile_start_offset = 0;
+
+        // 1. Direct read width, height, tile_count
         if (reader.remaining() >= 12) {
-            width_ = reader.u32();
-            height_ = reader.u32();
-            uint32_t tile_count = reader.u32();
+            uint32_t w = reader.u32();
+            uint32_t h = reader.u32();
+            uint32_t tc = reader.u32();
+            if (w > 0 && w <= 200 && h > 0 && h <= 200 && tc == w * h) {
+                width = w;
+                height = h;
+                tile_count = tc;
+                tile_start_offset = reader.position();
+            }
+        }
 
-            if (width_ > 0 && width_ <= 200 && height_ > 0 && height_ <= 200) {
-                tiles_.clear();
-                tiles_.resize(width_ * height_);
+        // 2. Adaptive signature scan jika direct read tidak cocok (width * height == tile_count)
+        if (tile_count == 0) {
+            for (size_t off = 4; off + 12 <= std::min(size, (size_t)160); ++off) {
+                uint32_t w = *reinterpret_cast<const uint32_t*>(extra_data + off);
+                uint32_t h = *reinterpret_cast<const uint32_t*>(extra_data + off + 4);
+                uint32_t tc = *reinterpret_cast<const uint32_t*>(extra_data + off + 8);
+                if (w >= 20 && w <= 200 && h >= 20 && h <= 200 && tc == w * h) {
+                    width = w;
+                    height = h;
+                    tile_count = tc;
+                    tile_start_offset = off + 12;
+                    break;
+                }
+            }
+        }
 
-                for (uint32_t i = 0; i < tile_count && reader.ok() && reader.remaining() >= 8; ++i) {
-                    Tile t;
-                    t.fg = reader.u16();
-                    t.bg = reader.u16();
-                    t.locktile = reader.u16(); // tile data / extra
-                    uint8_t flags1 = reader.u8();  // flags 1
-                    uint8_t flags2 = reader.u8();  // flags 2
-                    t.flags = static_cast<uint16_t>(flags1 | (flags2 << 8));
-                    if (i < tiles_.size()) {
-                        tiles_[i] = t;
+        if (width > 0 && height > 0 && tile_count > 0 && tile_start_offset > 0) {
+            width_ = width;
+            height_ = height;
+            tiles_.clear();
+            tiles_.resize(tile_count);
+
+            reader.seek(tile_start_offset);
+            for (uint32_t i = 0; i < tile_count && reader.ok() && reader.remaining() >= 8; ++i) {
+                Tile t;
+                t.fg = reader.u16();
+                t.bg = reader.u16();
+                t.locktile = reader.u16();
+                uint8_t flags1 = reader.u8();
+                uint8_t flags2 = reader.u8();
+                t.flags = static_cast<uint16_t>(flags1 | (flags2 << 8));
+                if (i < tiles_.size()) {
+                    tiles_[i] = t;
+                }
+
+                // Lewati tile extra data jika bit 0 (0x0001) aktif
+                if ((t.flags & 0x0001) && reader.remaining() >= 1) {
+                    uint8_t extra_type = reader.u8();
+                    switch (extra_type) {
+                        case 0: break;
+                        case 1: { // Lock
+                            if (reader.remaining() >= 9) {
+                                reader.skip(1); // settings flags
+                                reader.skip(4); // owner uid
+                                uint32_t access_count = reader.u32();
+                                if (reader.remaining() >= access_count * 4) {
+                                    reader.skip(access_count * 4);
+                                }
+                                if (reader.remaining() >= 4) {
+                                    reader.skip(4); // min_level / extra
+                                }
+                            }
+                            break;
+                        }
+                        case 2: { // Door
+                            if (reader.remaining() >= 2) {
+                                uint16_t label_len = reader.u16();
+                                if (reader.remaining() >= label_len + 1) {
+                                    reader.skip(label_len + 1);
+                                }
+                            }
+                            break;
+                        }
+                        case 3: { // Sign
+                            if (reader.remaining() >= 2) {
+                                uint16_t label_len = reader.u16();
+                                if (reader.remaining() >= label_len) {
+                                    reader.skip(label_len);
+                                }
+                            }
+                            break;
+                        }
+                        case 4: { // Tree / Seed
+                            if (reader.remaining() >= 5) {
+                                reader.skip(5); // age (u32) + fruit (u8)
+                            }
+                            break;
+                        }
+                        case 8: { // Dice
+                            if (reader.remaining() >= 1) reader.skip(1);
+                            break;
+                        }
+                        case 9: { // Provider
+                            if (reader.remaining() >= 4) reader.skip(4);
+                            break;
+                        }
+                        case 10: { // Achievement
+                            if (reader.remaining() >= 5) reader.skip(5);
+                            break;
+                        }
+                        case 11: { // Heart monitor
+                            if (reader.remaining() >= 6) {
+                                reader.skip(4);
+                                uint16_t name_len = reader.u16();
+                                if (reader.remaining() >= name_len) reader.skip(name_len);
+                            }
+                            break;
+                        }
+                        case 14: { // Mannequin
+                            if (reader.remaining() >= 2) {
+                                uint16_t text_len = reader.u16();
+                                if (reader.remaining() >= text_len + 23) {
+                                    reader.skip(text_len + 23);
+                                }
+                            }
+                            break;
+                        }
+                        case 15: { // Magic egg
+                            if (reader.remaining() >= 4) reader.skip(4);
+                            break;
+                        }
+                        case 16: case 17: { // Game block / generator
+                            if (reader.remaining() >= 1) reader.skip(1);
+                            break;
+                        }
+                        case 18: { // Xenonite
+                            if (reader.remaining() >= 5) reader.skip(5);
+                            break;
+                        }
+                        case 19: case 20: { // Phone / Crystal
+                            if (reader.remaining() >= 2) {
+                                uint16_t text_len = reader.u16();
+                                if (reader.remaining() >= text_len) reader.skip(text_len);
+                            }
+                            break;
+                        }
+                        case 23: { // Shelf
+                            if (reader.remaining() >= 16) reader.skip(16);
+                            break;
+                        }
+                        case 24: { // VIP entrance
+                            if (reader.remaining() >= 9) {
+                                reader.skip(5);
+                                uint32_t access_count = reader.u32();
+                                if (reader.remaining() >= access_count * 4) {
+                                    reader.skip(access_count * 4);
+                                }
+                            }
+                            break;
+                        }
+                        case 27: { // Weather machine
+                            if (reader.remaining() >= 4) reader.skip(4);
+                            break;
+                        }
+                        default:
+                            break;
                     }
                 }
-                Logger::log("[WORLD] 🌍 World Data dimuat: ", world_name_, " (", width_, "x", height_, ", total tiles: ", tile_count, ")");
+            }
+
+            Logger::log("[WORLD] 🌍 World Data dimuat: ", world_name_, " (", width_, "x", height_, ", total tiles: ", tile_count, ")");
+
+            // ============================================================
+            // Parsing Dropped Items (Floating Objects)
+            // ============================================================
+            dropped_items_.clear();
+            bool parsed_dropped = false;
+
+            // Jalur A: Forward parsing jika pembacaan tile tepat berakhir di header dropped items
+            if (reader.ok() && reader.remaining() >= 8) {
+                uint32_t d_count = reader.u32();
+                uint32_t last_uid = reader.u32();
+                (void)last_uid;
+                if (d_count > 0 && d_count <= 4000 && reader.remaining() >= d_count * 16) {
+                    bool all_valid = true;
+                    std::vector<DroppedItem> temp_items;
+                    temp_items.reserve(d_count);
+                    for (uint32_t d = 0; d < d_count; ++d) {
+                        uint16_t item_id = reader.u16();
+                        float ox = reader.f32();
+                        float oy = reader.f32();
+                        uint8_t count = reader.u8();
+                        uint8_t flags = reader.u8();
+                        (void)flags;
+                        uint32_t uid = reader.u32();
+
+                        if (item_id == 0 || item_id > 25000 ||
+                            std::isnan(ox) || std::isinf(ox) || ox < 0.0f || ox > 6400.0f ||
+                            std::isnan(oy) || std::isinf(oy) || oy < 0.0f || oy > 6400.0f ||
+                            count == 0 || uid == 0) {
+                            all_valid = false;
+                            break;
+                        }
+                        temp_items.push_back({uid, item_id, count, ox, oy});
+                    }
+                    if (all_valid && !temp_items.empty()) {
+                        dropped_items_ = std::move(temp_items);
+                        parsed_dropped = true;
+                    }
+                }
+            }
+
+            // Jalur B: Signature / Heuristic Scanner memindai dari akhir buffer mundur ke depan
+            // Sangat andal menjamin dropped items ditemukan meskipun ada tile extra GTPS custom.
+            if (!parsed_dropped && size >= 24) {
+                size_t min_scan = (tile_start_offset > 0) ? (tile_start_offset + tile_count * 4) : 64;
+                size_t max_scan = (size >= 24) ? (size - 24) : 0;
+                if (min_scan > max_scan) min_scan = 64;
+
+                for (size_t offset = max_scan; offset >= min_scan; --offset) {
+                    uint32_t cand_count = *reinterpret_cast<const uint32_t*>(extra_data + offset);
+                    uint32_t cand_last_uid = *reinterpret_cast<const uint32_t*>(extra_data + offset + 4);
+
+                    if (cand_count == 0 || cand_count > 4000) continue;
+                    if (cand_last_uid == 0) continue;
+
+                    size_t block_bytes = static_cast<size_t>(cand_count) * 16;
+                    if (offset + 8 + block_bytes > size) continue;
+
+                    size_t trailing_bytes = size - (offset + 8 + block_bytes);
+                    if (trailing_bytes > 512) continue;
+
+                    bool valid = true;
+                    std::vector<DroppedItem> temp_items;
+                    temp_items.reserve(cand_count);
+
+                    const uint8_t* p = extra_data + offset + 8;
+                    for (uint32_t i = 0; i < cand_count; ++i) {
+                        uint16_t item_id = *reinterpret_cast<const uint16_t*>(p);
+                        float ox = *reinterpret_cast<const float*>(p + 2);
+                        float oy = *reinterpret_cast<const float*>(p + 6);
+                        uint8_t count = *(p + 10);
+                        uint8_t flags = *(p + 11);
+                        (void)flags;
+                        uint32_t uid = *reinterpret_cast<const uint32_t*>(p + 12);
+
+                        if (item_id == 0 || item_id > 25000 ||
+                            std::isnan(ox) || std::isinf(ox) || ox < 0.0f || ox > 6400.0f ||
+                            std::isnan(oy) || std::isinf(oy) || oy < 0.0f || oy > 6400.0f ||
+                            count == 0 || uid == 0) {
+                            valid = false;
+                            break;
+                        }
+
+                        temp_items.push_back({uid, item_id, count, ox, oy});
+                        p += 16;
+                    }
+
+                    if (valid && !temp_items.empty()) {
+                        dropped_items_ = std::move(temp_items);
+                        parsed_dropped = true;
+                        Logger::log("[WORLD] 🔍 Signature Scanner menemukan ", dropped_items_.size(), " floating items pada offset ", offset, " (trailing=", trailing_bytes, " bytes)");
+                        break;
+                    }
+                }
+            }
+
+            if (!dropped_items_.empty()) {
+                Logger::log("[WORLD] 📦 Memuat ", dropped_items_.size(), " floating items aktif di world:");
+                for (const auto& item : dropped_items_) {
+                    Logger::log("       - Item ID=", item.id, " UID=", item.uid, " Count=", (int)item.count, " Pos=(", item.x, ", ", item.y, ")");
+                }
+            } else {
+                Logger::log("[WORLD] 📦 World bersih: tidak ada floating items di world saat ini.");
             }
         }
     } catch (...) {}
@@ -366,6 +614,26 @@ int WorldState::getItemCount(uint16_t item_id) {
         if (item.id == item_id) return item.count;
     }
     return 0;
+}
+
+bool WorldState::canPickupItem(uint16_t item_id) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    // Gems (ID 112) tidak pernah memakai slot tas
+    if (item_id == 112) return true;
+
+    // Jika data inventory belum diterima atau slot 0, izinkan mencoba pickup
+    if (inventory_slots_ == 0 || inventory_.empty()) return true;
+
+    // Jika slot tas masih tersedia
+    if (inventory_.size() < inventory_slots_) return true;
+
+    // Jika tas penuh, periksa apakah item ID sudah ada di tas dengan count < 250 (GTPS/CPS stack hingga 250)
+    for (const auto& item : inventory_) {
+        if (item.id == item_id && item.count < 250) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void WorldState::setCanSeeGhost(bool enable) {

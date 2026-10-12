@@ -114,7 +114,15 @@ public:
         return str(len);
     }
 
-    size_t remaining() const { return size - pos; }
+    size_t remaining() const { return (pos <= size) ? (size - pos) : 0; }
+    size_t position() const { return pos; }
+    void skip(size_t bytes) {
+        if (pos + bytes > size) pos = size;
+        else pos += bytes;
+    }
+    void seek(size_t p) {
+        pos = std::min(p, size);
+    }
 };
 
 struct Variant {

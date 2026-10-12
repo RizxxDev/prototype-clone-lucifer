@@ -23,6 +23,7 @@ class EnetClient;
 class WorldState;
 class BotActions;
 class AutoFarmController;
+class AutoCollectController;
 class LuaEngine;
 struct BotInfo;
 struct DeviceFingerprint;
@@ -37,7 +38,8 @@ class TextEditor;
 class LuciferGui {
 public:
     LuciferGui(EnetClient& enet, WorldState& world, BotActions& actions,
-               AutoFarmController& autofarm, LuaEngine& lua_engine,
+               AutoFarmController& autofarm, AutoCollectController& autocollect,
+               LuaEngine& lua_engine,
                BotInfo& info, std::atomic<bool>& running,
                DeviceFingerprint& fingerprint, ReconnectController& reconnect_ctrl,
                std::function<void()> reconnect_fn = nullptr);
@@ -137,6 +139,7 @@ public:
     WorldState& world_;
     BotActions& actions_;
     AutoFarmController& autofarm_;
+    AutoCollectController& autocollect_;
     LuaEngine& lua_engine_;
     BotInfo& info_;
     std::atomic<bool>& running_;
@@ -145,6 +148,11 @@ public:
     std::function<void()> reconnect_fn_;
     BotManager* bot_manager_ = nullptr;
     BotStats gui_stats_;
+
+    // Auto-Collect Base Feature Buffers
+    int collect_filter_id_ = 0;
+    int collect_delay_ms_ = 600;
+    bool pref_passive_collect_ = true;
 
     // Movement (Tanda Panah) Buffers
     int move_step_ = 1; // 1 tile per click/keypress

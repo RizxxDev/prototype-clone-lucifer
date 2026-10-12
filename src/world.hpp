@@ -90,6 +90,7 @@ public:
     std::vector<DroppedItem> getDroppedItems();
     uint32_t getInventorySlots();
     int getItemCount(uint16_t item_id);
+    bool canPickupItem(uint16_t item_id);
 
     // NPC Management (Bothax & Lucifer API)
     void addOrUpdateNPC(int id, int type, float x, float y, float target_x, float target_y);

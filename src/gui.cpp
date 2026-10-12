@@ -57,12 +57,13 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 }
 
 LuciferGui::LuciferGui(EnetClient& enet, WorldState& world, BotActions& actions,
-                       AutoFarmController& autofarm, LuaEngine& lua_engine,
+                       AutoFarmController& autofarm, AutoCollectController& autocollect,
+                       LuaEngine& lua_engine,
                        BotInfo& info, std::atomic<bool>& running,
                        DeviceFingerprint& fingerprint, ReconnectController& reconnect_ctrl,
                        std::function<void()> reconnect_fn)
     : enet_(enet), world_(world), actions_(actions),
-      autofarm_(autofarm), lua_engine_(lua_engine), info_(info), running_(running),
+      autofarm_(autofarm), autocollect_(autocollect), lua_engine_(lua_engine), info_(info), running_(running),
       fingerprint_(fingerprint), reconnect_ctrl_(reconnect_ctrl), reconnect_fn_(reconnect_fn) {
     g_current_gui = this;
 
@@ -400,6 +401,28 @@ void LuciferGui::renderMainLayout() {
         renderTopNav();
 
         ImGui::Spacing();
+
+        // Passive Pass-Through Auto-Collect tick loop (berjalan jika passive enabled)
+        static auto s_last_auto_collect = std::chrono::steady_clock::now();
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - s_last_auto_collect).count() >= 350) {
+            s_last_auto_collect = now;
+            if (bot_manager_) {
+                for (auto& b : bot_manager_->getBots()) {
+                    if (b && b->isOnline() && b->getAutoCollect().isPassiveEnabled()) {
+                        float bx = 0, by = 0;
+                        int btx = 0, bty = 0;
+                        b->getWorld().getLocalPos(bx, by, btx, bty);
+                        b->getAutoCollect().triggerPassThroughCollect(bx, by);
+                    }
+                }
+            } else if (enet_.isConnected() && autocollect_.isPassiveEnabled()) {
+                float bx = 0, by = 0;
+                int btx = 0, bty = 0;
+                world_.getLocalPos(bx, by, btx, bty);
+                autocollect_.triggerPassThroughCollect(bx, by);
+            }
+        }
 
         switch (current_top_tab_) {
         case LuciferTopTab::Bots:     renderTabBots(); break;
@@ -966,6 +989,13 @@ void LuciferGui::renderCardMovement(float w, float h) {
     ImGui::SliderInt("##Step", &move_step_, 1, 10);
     ImGui::SameLine();
     ImGui::Button("⚙️##step_gear", ImVec2(22, 20));
+
+    ImGui::Spacing();
+    ImGui::SetCursorPosX(center_x - 65.0f);
+    if (ImGui::Button("🧲 Collect Nearby", ImVec2(130, 22))) {
+        if (bot) bot->getActions().collectNearby(4.0f);
+        else actions_.collectNearby(4.0f);
+    }
 
     ImGui::EndChild();
 }
@@ -2423,6 +2453,45 @@ void LuciferGui::renderSubTabAutomation() {
     } else {
         if (ImGui::Button("🛑 Hentikan Auto-Farm", ImVec2(180, 28))) {
             autofarm_.stop();
+        }
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Auto-Collect Base Feature Section
+    std::shared_ptr<BotInstance> bot = (bot_manager_ && selected_bot_id_ > 0)
+        ? bot_manager_->getBotById(selected_bot_id_) : nullptr;
+    AutoCollectController& cur_collect = bot ? bot->getAutoCollect() : autocollect_;
+
+    ImGui::TextColored(ImVec4(0.5f, 0.9f, 1.0f, 1.0f), "🧲 Auto-Collect Floating Items (Base Feature)");
+    ImGui::Text("Status Sweeper: %s", cur_collect.isRunning() ? "ACTIVE (MENYAPU WORLD DENGAN PATHFINDING)" : "IDLE");
+    
+    bool passive_en = cur_collect.isPassiveEnabled();
+    if (ImGui::Checkbox("Otomatis Ambil Saat Melangkah / Pass-Through (Always-On)", &passive_en)) {
+        cur_collect.setPassiveEnabled(passive_en);
+    }
+    ImGui::TextDisabled("Ketika aktif, bot otomatis mengambil item saat melintas di atasnya (seperti player asli).");
+
+    ImGui::SetNextItemWidth(140);
+    ImGui::InputInt("Filter Item ID##collect_id", &collect_filter_id_);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(0 = Semua Item, 112 = Gems)");
+
+    ImGui::SetNextItemWidth(180);
+    if (ImGui::SliderInt("Pickup Delay (ms)##collect_delay", &collect_delay_ms_, 300, 1500)) {
+        cur_collect.setDelayMs(collect_delay_ms_);
+    }
+
+    ImGui::Spacing();
+    if (!cur_collect.isRunning()) {
+        if (ImGui::Button("▶️ Mulai Sweeper (Pathfind & Collect)", ImVec2(240, 28))) {
+            cur_collect.start(static_cast<uint16_t>(collect_filter_id_ > 0 ? collect_filter_id_ : 0), collect_delay_ms_);
+        }
+    } else {
+        if (ImGui::Button("🛑 Hentikan Sweeper", ImVec2(240, 28))) {
+            cur_collect.stop();
         }
     }
 

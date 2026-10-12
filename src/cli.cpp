@@ -12,9 +12,10 @@
 #include <cctype>
 
 Cli::Cli(EnetClient& enet, std::atomic<bool>& running, const BotInfo& info,
-         WorldState& world, BotActions& actions, AutoFarmController& autofarm)
+         WorldState& world, BotActions& actions, AutoFarmController& autofarm,
+         AutoCollectController& autocollect)
     : enet_(enet), running_(running), info_(info),
-      world_(world), actions_(actions), autofarm_(autofarm) {}
+      world_(world), actions_(actions), autofarm_(autofarm), autocollect_(autocollect) {}
 
 Cli::~Cli() {
     stop();
@@ -107,6 +108,10 @@ void Cli::processCommand(const std::string& line) {
         cmdFarm(args);
     } else if (cmd_lower == "stopfarm") {
         cmdStopFarm();
+    } else if (cmd_lower == "autocollect" || cmd_lower == "ac") {
+        cmdAutoCollect(args);
+    } else if (cmd_lower == "stopcollect" || cmd_lower == "sac") {
+        cmdStopCollect();
     } else if (cmd_lower == "respawn") {
         cmdRespawn();
     } else if (cmd_lower == "raw") {
@@ -143,9 +148,11 @@ void Cli::cmdHelp() {
               << "  warp, w <world>         - Berpindah ke world lain\n"
               << "  say, s <text>           - Mengirim chat ke world\n"
               << "  respawn                 - Respawn karakter kembali ke pintu masuk\n\n"
-              << " [Automation / Lucifer Auto-Farm]\n"
+              << " [Automation / Lucifer Auto-Farm & Collector]\n"
               << "  farm <id> <x> <y> [ms]  - Mulai auto-farm loop pada tile (x, y)\n"
-              << "  stopfarm                - Menghentikan auto-farm\n\n"
+              << "  stopfarm                - Menghentikan auto-farm\n"
+              << "  autocollect, ac [id] [d]- Mulai auto-collect sweeper dengan pathfinding\n"
+              << "  stopcollect, sac        - Menghentikan auto-collect sweeper\n\n"
               << " [Sistem & Debug]\n"
               << "  status, st              - Status koneksi dan akun\n"
               << "  raw <hex>               - Kirim paket mentah hex\n"
@@ -356,6 +363,32 @@ void Cli::cmdStopFarm() {
     }
 }
 
+void Cli::cmdAutoCollect(const std::string& args) {
+    uint16_t filter_id = 0;
+    int delay = 600;
+    if (!args.empty()) {
+        std::istringstream iss(args);
+        int id_val = 0;
+        if (iss >> id_val) filter_id = static_cast<uint16_t>(id_val);
+        iss >> delay;
+    }
+
+    if (autocollect_.start(filter_id, delay)) {
+        Logger::log("[CLI] 🧲 Auto-collect sweeper diaktifkan (Filter ID=", filter_id, ", Delay=", delay, "ms)");
+    } else {
+        Logger::log("[CLI] ⚠️ Auto-collect sweeper sudah berjalan! Ketik 'stopcollect' untuk menghentikan.");
+    }
+}
+
+void Cli::cmdStopCollect() {
+    if (autocollect_.isRunning()) {
+        autocollect_.stop();
+        Logger::log("[CLI] 🛑 Auto-collect sweeper dihentikan.");
+    } else {
+        Logger::log("[CLI] Auto-collect sweeper tidak sedang berjalan.");
+    }
+}
+
 void Cli::cmdRespawn() {
     actions_.respawn();
 }
@@ -397,6 +430,8 @@ void Cli::cmdStatus() {
               << "  Version   : " << info_.version << "\n"
               << "  World     : " << world_.getWorldName() << "\n"
               << "  Auto-Farm : " << (autofarm_.isRunning() ? "AKTIF" : "NONAKTIF") << "\n"
+              << "  Sweeper   : " << (autocollect_.isRunning() ? "AKTIF" : "NONAKTIF") << "\n"
+              << "  Passive   : " << (autocollect_.isPassiveEnabled() ? "AKTIF (Pass-Through Always-On)" : "NONAKTIF") << "\n"
               << "  Status    : " << (enet_.isConnected() ? "TERHUBUNG (Online)" : "TERPUTUS (Offline)") << "\n"
               << "----------------------------------------------\n\n";
 }

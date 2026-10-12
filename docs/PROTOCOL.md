@@ -279,12 +279,29 @@ Klien resmi Growtopia dan Lucifer mengambil dropped item bukan dengan mengirim T
 - **Tipe Paket**: `PACKET_ITEM_ACTIVATE_OBJECT_REQUEST` (Tank Packet Type `11` / `0x0B`).
 - **Struktur Field Kritis**:
   - `pkt.type = PACKET_ITEM_ACTIVATE_OBJECT_REQUEST` (`11`)
-  - `pkt.net_id = object_uid`
-  - `pkt.target_net_id = object_uid`
-  - `pkt.main_data = object_uid`
-  - `pkt.pos_x = player_pos_x`, `pkt.pos_y = player_pos_y` (koordinat piksel posisi berdiri bot saat mengambil)
-- **Kompatibilitas Lua**:
-  - `Collect(oid)`: Mengirim paket aktivasi pengambilan untuk UID objek spesifik.
-  - `Collect(obj)`: Menerima langsung tabel `WorldObject` dari `GetObjectList()`, mengekstrak `oid`/`uid`.
-  - `Collect(radius)` / `CollectNearby(radius)`: Memindai item di sekitar bot dalam jangkauan radius tertentu dan mengirim paket pengambilan secara otomatis.
+  - `pkt.net_id = local_net_id` (**Kritis**: Wajib berisi NetID lokal milik bot, bukan UID objek! Sebagian besar server GTPS memvalidasi `pkt.net_id == peer->net_id` dan akan menolak permintaan jika `net_id` tidak cocok).
+  - `pkt.target_net_id = object_uid` (UID objek yang ingin diambil).
+  - `pkt.main_data = object_uid` (UID objek sekunder).
+  - `pkt.pos_x = player_pos_x`, `pkt.pos_y = player_pos_y` (Koordinat piksel posisi berdiri bot saat mengambil item).
+
+### C. Mekanisme Pass-Through Hitbox Collection (Seperti Player Asli)
+Server Growtopia/GTPS secara ketat memvalidasi jarak (*proximity check*) antara koordinat pemain dan koordinat item floating:
+- **Radius Ambil**: $\le 44.0\text{ piksel}$ (~1.37 tile). Memberikan toleransi natural terhadap offset vertikal animasi floating item di atas ubin/tanah.
+- **Deteksi Saat Melangkah (`moveTo`) & Map Load**:
+  - Saat bot berjalan melangkah (baik single-step maupun background pathfinding thread), fungsi `checkPassThroughCollect` secara otomatis memindai seluruh `dropped_items_` dalam radius $\le 44\text{ px}$.
+  - Saat bot pertama kali memasuki world (`PACKET_SEND_MAP_DATA`), bot langsung memeriksa apakah ada floating item di bawah kakinya dan menyerapnya seketika.
+  - Untuk setiap item floating yang terlewati, bot memvalidasi kapasitas inventaris (`canPickupItem`):
+    - **Gems (Item ID 112)**: Selalu diambil tanpa syarat, karena Gems tidak mengonsumsi slot tas.
+    - **Item Biasa**: Diambil jika bot masih memiliki slot inventaris kosong ATAU item tersebut sudah ada di tas dengan jumlah $< 250$ (mendukung server CPS/GTPS bertumpuk 250). Jika tas penuh, item dilewati dan bot tetap melanjutkan pengambilan Gems atau item lain yang muat.
+  - Rate-limit internal: Per-UID cooldown 250ms untuk mencegah spam paket 11 yang dapat memicu rate-limit disconnect server.
+- **Instant Drop-at-Feet Pickup**:
+  - Saat bot menerima siaran `PACKET_ITEM_CHANGE_OBJECT` (Tank 14/8) dari server untuk item baru yang jatuh tepat di bawah kaki bot (radius $\le 44\text{ px}$), bot langsung merespons dengan paket 11 seketika.
+
+### D. Kompatibilitas Lua
+- `getObjects()` / `bot:getObjects()`: Mengembalikan daftar seluruh item floating di world lengkap dengan `oid`, `itemid`, `count`, `pos`, `tile_x`, `tile_y`.
+- `getObject(oid)` / `bot:getObject(oid)`: Mengembalikan data satu objek berdasarkan UID.
+- `collectObject(oid, [range])` / `bot:collectObject(oid, [range])`: Mengambil dropped item via UID. Jika `range` diberikan dan jarak melebihi `range`, bot dapat melangkah ke item terlebih dahulu.
+- `collectByID(item_id, [range])` / `bot:collectByID(item_id, [range])`: Mencari item floating terdekat dengan Item ID tertentu dan mengambilnya.
+- `Collect(oid)` / `Collect(obj)` / `Collect([radius])` / `CollectNearby([radius])`: Kompatibel penuh dengan gaya penulisan Bothax.
+
 

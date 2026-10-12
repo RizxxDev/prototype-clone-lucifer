@@ -8,6 +8,7 @@ class EnetClient;
 class WorldState;
 class BotActions;
 class AutoFarmController;
+class AutoCollectController;
 
 struct BotInfo {
     std::string account_name;
@@ -20,7 +21,8 @@ struct BotInfo {
 class Cli {
 public:
     Cli(EnetClient& enet, std::atomic<bool>& running, const BotInfo& info,
-        WorldState& world, BotActions& actions, AutoFarmController& autofarm);
+        WorldState& world, BotActions& actions, AutoFarmController& autofarm,
+        AutoCollectController& autocollect);
     ~Cli();
 
     // Memulai REPL thread
@@ -51,6 +53,8 @@ private:
     void cmdPos();
     void cmdFarm(const std::string& args);
     void cmdStopFarm();
+    void cmdAutoCollect(const std::string& args);
+    void cmdStopCollect();
     void cmdRespawn();
     void cmdRaw(const std::string& hex_str);
     void cmdStatus();
@@ -65,5 +69,6 @@ private:
     WorldState& world_;
     BotActions& actions_;
     AutoFarmController& autofarm_;
+    AutoCollectController& autocollect_;
     std::thread thread_;
 };

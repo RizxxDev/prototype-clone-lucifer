@@ -62,6 +62,7 @@ public:
     WorldState& getWorld() { return *world_; }
     BotActions& getActions() { return *actions_; }
     AutoFarmController& getAutoFarm() { return *autofarm_; }
+    AutoCollectController& getAutoCollect() { return *autocollect_; }
     LuaEngine& getLuaEngine() { return *lua_engine_; }
     DeviceFingerprint& getFingerprint() { return fingerprint_; }
     ReconnectController& getReconnectController() { return reconnect_ctrl_; }
@@ -125,6 +126,7 @@ private:
     std::unique_ptr<WorldState> world_;
     std::unique_ptr<BotActions> actions_;
     std::unique_ptr<AutoFarmController> autofarm_;
+    std::unique_ptr<AutoCollectController> autocollect_;
     std::unique_ptr<LuaEngine> lua_engine_;
 
     std::atomic<bool> active_{false};

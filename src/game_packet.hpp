@@ -151,10 +151,10 @@ namespace TankPacketHelper {
     }
 
     // Create Item Activate Object Request (Collect / pickup floating item or gem)
-    inline GameUpdatePacket createCollectObject(int object_uid, float player_x, float player_y) {
+    inline GameUpdatePacket createCollectObject(int object_uid, float player_x, float player_y, int local_net_id = -1) {
         GameUpdatePacket pkt{};
         pkt.type = PACKET_ITEM_ACTIVATE_OBJECT_REQUEST; // Type 11
-        pkt.net_id = object_uid;
+        pkt.net_id = (local_net_id >= 0) ? local_net_id : -1;
         pkt.target_net_id = object_uid;
         pkt.main_data = object_uid;
         pkt.pos_x = player_x;

@@ -306,6 +306,7 @@ int main(int argc, char** argv) {
         WorldState world;
         BotActions actions(enet, world);
         AutoFarmController autofarm(actions, world);
+        AutoCollectController autocollect(actions, world);
         LuaEngine lua_engine(actions, world, enet);
 
         // Anti-Detection & Device Fingerprint
@@ -507,6 +508,9 @@ int main(int argc, char** argv) {
                     GameUpdatePacket state_pkt;
                     std::memcpy(&state_pkt, pkt.payload.data(), sizeof(GameUpdatePacket));
                     world.updatePlayerPos(state_pkt.net_id, state_pkt.pos_x, state_pkt.pos_y);
+                    if (state_pkt.net_id == world.getLocalNetId()) {
+                        autocollect.triggerPassThroughCollect(state_pkt.pos_x, state_pkt.pos_y);
+                    }
                 }
                 // Tank packet 4: PACKET_SEND_MAP_DATA (World Map)
                 else if (tank_type == PACKET_SEND_MAP_DATA) {
@@ -522,6 +526,12 @@ int main(int argc, char** argv) {
                     Logger::log("  🎉 AKUN ONLINE! PACKET_SEND_MAP_DATA diterima dari server!");
                     Logger::log("  🌍 Bot sudah berhasil masuk dan berada di dalam world: ", target_world);
                     Logger::log("************************************************************\n");
+
+                    // Periksa apakah sudah ada floating item di dekat posisi bot saat spawn
+                    float bx = 0.0f, by = 0.0f;
+                    int btx = 0, bty = 0;
+                    world.getLocalPos(bx, by, btx, bty);
+                    autocollect.triggerPassThroughCollect(bx, by);
                 }
                 // Tank packet 8 (or 14): Dropped Item Event (Spawn / Collect)
                 else if ((tank_type == PACKET_ITEM_CHANGE_OBJECT || tank_type == 14) && pkt.payload.size() >= sizeof(GameUpdatePacket)) {
@@ -542,6 +552,16 @@ int main(int argc, char** argv) {
                         }
                         world.addOrUpdateDroppedItem(uid, item_id, item_pkt.count1 > 0 ? item_pkt.count1 : 1, item_pkt.pos_x, item_pkt.pos_y);
                         Logger::log("📦 Dropped Item baru: ID=", item_id, " UID=", uid, " Count=", (int)item_pkt.count1, " Pos=(", item_pkt.pos_x, ", ", item_pkt.pos_y, ")");
+
+                        // Auto-collect jika item jatuh tepat di dekat posisi bot (spawn at feet / sehabis memukul blok)
+                        float bx = 0.0f, by = 0.0f;
+                        int btx = 0, bty = 0;
+                        world.getLocalPos(bx, by, btx, bty);
+                        float dx = item_pkt.pos_x - bx;
+                        float dy = item_pkt.pos_y - by;
+                        if (dx * dx + dy * dy <= (44.0f * 44.0f)) {
+                            autocollect.triggerPassThroughCollect(bx, by);
+                        }
                     }
                 }
                 // Tank packet 9: PACKET_SEND_INVENTORY_STATE
@@ -629,6 +649,7 @@ int main(int argc, char** argv) {
                                 float new_x = vars[1].float_val;
                                 float new_y = vars[1].float_val2;
                                 world.setLocalPos(new_x, new_y);
+                                autocollect.triggerPassThroughCollect(new_x, new_y);
                                 Logger::log("[WORLD] 📍 OnSetPos diterima: Pos=(", new_x, ", ", new_y, ") Tile=(", (int)(new_x / 32.0f), ", ", (int)(new_y / 32.0f), ")");
                             }
                         }
@@ -870,7 +891,7 @@ int main(int argc, char** argv) {
         }
 
         BotInfo info{acc_name, version, platform, game_host, game_port};
-        LuciferGui gui(enet, world, actions, autofarm, lua_engine, info, g_running,
+        LuciferGui gui(enet, world, actions, autofarm, autocollect, lua_engine, info, g_running,
                        fingerprint, reconnect_ctrl, do_reconnect);
         gui.setMainProxy(main_proxy);
         gui.getStats() = single_stats;
@@ -929,7 +950,7 @@ int main(int argc, char** argv) {
             gui.shutdown();
         } else {
             Logger::log("[!] Gagal membuka jendela GUI DirectX 11, fallback ke CLI...");
-            Cli cli(enet, g_running, info, world, actions, autofarm);
+            Cli cli(enet, g_running, info, world, actions, autofarm, autocollect);
             cli.start();
             while (g_running) {
                 enet.poll();
@@ -944,6 +965,7 @@ int main(int argc, char** argv) {
 
         lua_engine.stopScript();
         autofarm.stop();
+        autocollect.stop();
         enet.disconnect();
 
     } catch (const std::exception& e) {

@@ -21,6 +21,7 @@ Dokumen ini merinci status implementasi proyek saat ini, riwayat masalah teknis 
 | **Fase 6.1** | Algoritma A* Pathfinding (`FindPath`/`CheckPath`) & Grid World Collision | ✅ Selesai | [`src/world.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/world.hpp), [`src/world.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/world.cpp), [`src/lua_engine.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/lua_engine.cpp) |
 | **Fase 6.2** | Emulasi Offsets Standalone (15 Offsets) & Binary Collision `items.dat` | ✅ Selesai | [`src/item_database.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/item_database.cpp), [`src/bot_actions.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_actions.cpp), [`src/lua_engine.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/lua_engine.cpp) |
 | **Fase 6.3** | Full Bothax 43 Functions, 16 Structures, CamelCase Aliases & Multi-Hook Engine | ✅ Selesai | [`src/lua_engine.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/lua_engine.hpp), [`src/lua_engine.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/lua_engine.cpp), [`src/world.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/world.hpp) |
+| **Fase 6.4** | Base Feature: Native AutoCollectController (Passive Hitbox & Active Pathfinding Sweeper) | ✅ Selesai | [`src/bot_actions.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_actions.hpp), [`src/bot_actions.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_actions.cpp), [`src/bot_instance.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_instance.cpp), [`src/gui.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/gui.cpp) |
 
 ---
 
@@ -232,6 +233,30 @@ Di bawah ini adalah kumpulan masalah non-sepele dalam reverse-engineering dan pe
   1. Di [`src/lua_engine.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/lua_engine.cpp), ubah `LuaEngine::runScript()` agar **selalu memanggil `stopScript()` tanpa syarat**.
   2. `stopScript()` secara aman memeriksa `if (worker_.joinable()) worker_.join();`, sehingga worker thread lama dijamin telah selesai, di-reap oleh OS, dan status `joinable()` menjadi `false` sebelum thread baru dialokasikan.
   3. Lakukan pengamanan serupa secara defensif pada `AutoFarmController::start()` ([`src/bot_actions.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_actions.cpp)) dan `Cli::start()` ([`src/cli.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/cli.cpp)).
+
+### 21. Protokol Pengambilan Item Mengambang (Tank Packet Type 11) & Validasi NetID Server GTPS
+- **Masalah**:
+  1. Bot berdiri tepat di atas floating item (misal item kartu stack 250) namun item tidak terambil (*pass-through collect tidak bereaksi*).
+  2. Saat tombol *Collect Nearby* ditekan, konsol membanjiri log `Mengirim paket collect UID=-1 Pos=(...)` dan server mengabaikan permintaan tersebut.
+  3. Pengiriman paket collect item mengambang (`PACKET_ITEM_ACTIVATE_OBJECT_REQUEST`, Tank Type 11) sering diabaikan atau gagal diproses oleh server GTPS jika `net_id` atau `UID` tidak sesuai.
+  4. Ketika inventaris penuh atau batas stack default (200) tercapai pada server CPS yang mendukung stack 250, bot menolak menyerap item.
+- **Penyebab**:
+  1. **Desinkronisasi Map Data Parsing (`WorldState::parseMapData`)**: Growtopia tile map memiliki data variabel (*Tile Extra Data*) untuk lock (tipe 1), pintu (tipe 2), sign (tipe 3), pohon/seed (tipe 4), dll. Mengasumsikan tile statis 8 byte menyebabkan reader tertinggal ribuan byte di dalam array tile dan membaca byte acak sebagai `dropped_count`, membuat `dropped_items_` kosong (`size = 0`).
+  2. **Paket Sampah UID=-1**: Karena `dropped_items_` kosong, `checkPassThroughCollect` langsung keluar tanpa aksi, sementara `collectNearby` mengeksekusi fallback `collect(-1)`. Server GTPS menolak UID `-1` karena tidak ada objek world ber-ID negatif.
+  3. **Batas Jarak & Stack**: Radius pass-through 36px terlalu ketat terhadap offset animasi melayang item, dan `canPickupItem` membatasi stack pada 200 padahal GTPS/CPS menampung hingga 250.
+- **Solusi**:
+  1. **Dual-Path Dropped Items Parsing di [`src/world.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/world.cpp)**:
+     - **Path A**: Implementasi Tile Extra Skipper untuk mengekstrak dan melompati byte data lock, door, sign, seed, dice, provider, mannequin, dll.
+     - **Path B (Signature & Heuristic Scanner)**: Memindai dari akhir buffer `PACKET_SEND_MAP_DATA` ke arah depan untuk mendeteksi blok 16-byte dropped item (`item_id` 1..25000, `float x` 0..6400, `float y` 0..6400, `count` 1..250, `uid` > 0). Menjamin 100% floating items terdeteksi meskipun server GTPS menggunakan tile extra kustom.
+  2. **Eliminasi Paket Palsu UID=-1**:
+     - Pada `BotActions::collectNearby()`, hapus pengiriman `collect(-1)`. Jika tidak ada item dalam radius, log info bersih dan kembalikan 0.
+  3. **Penyempurnaan Hitbox & Instant Spawn Pickup**:
+     - Naikkan toleransi `max_dist_sq` pada `checkPassThroughCollect()` ke `44.0f * 44.0f` (~1.37 tile) dengan per-UID debounce 250ms.
+     - Picu `triggerPassThroughCollect()` seketika saat `PACKET_SEND_MAP_DATA` selesai di-parse agar item di bawah kaki saat bot spawn langsung terambil.
+  4. **Pembaruan Validasi Inventaris**:
+     - Pada `WorldState::canPickupItem()`, tingkatkan batas stack ke 250 serta toleransi saat tas belum tersinkronisasi (`inventory_slots_ == 0 || inventory_.empty()`).
+  5. **Integritas Tank Packet Type 11**:
+     - Pastikan `TankPacketHelper::createCollectObject()` membawa NetID lokal bot yang sah dan UID objek riil dari `DroppedItem`.
 
 ---
 

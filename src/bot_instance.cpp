@@ -27,6 +27,7 @@ BotInstance::BotInstance(int id,
     world_ = std::make_unique<WorldState>();
     actions_ = std::make_unique<BotActions>(*enet_, *world_);
     autofarm_ = std::make_unique<AutoFarmController>(*actions_, *world_);
+    autocollect_ = std::make_unique<AutoCollectController>(*actions_, *world_);
     lua_engine_ = std::make_unique<LuaEngine>(*actions_, *world_, *enet_);
     lua_engine_->setProxyCallbacks(
         [this]() { return proxy_; },
@@ -331,6 +332,7 @@ void BotInstance::stop() {
     bool was_active = active_.exchange(false);
     bool was_in_world = in_world_.exchange(false);
     if (autofarm_) autofarm_->stop();
+    if (autocollect_) autocollect_->stop();
     if (lua_engine_) lua_engine_->stopScript();
     if (enet_) enet_->disconnect();
     if (proxy_tunnel_) {
@@ -554,6 +556,9 @@ void BotInstance::setupPacketHandlers() {
                 GameUpdatePacket state_pkt;
                 std::memcpy(&state_pkt, pkt.payload.data(), sizeof(GameUpdatePacket));
                 world_->updatePlayerPos(state_pkt.net_id, state_pkt.pos_x, state_pkt.pos_y);
+                if (state_pkt.net_id == world_->getLocalNetId() && autocollect_) {
+                    autocollect_->triggerPassThroughCollect(state_pkt.pos_x, state_pkt.pos_y);
+                }
             }
             // Tank 4: Map Data
             else if (tank_type == PACKET_SEND_MAP_DATA) {
@@ -566,6 +571,13 @@ void BotInstance::setupPacketHandlers() {
                 }
                 world_->setWorldName(target_world_);
                 Logger::log("[BOT #", id_, "] 🌍 Map data diterima! Bot berada di world: ", target_world_);
+
+                // Periksa apakah sudah ada floating item di dekat posisi bot saat spawn
+                float bx = 0.0f, by = 0.0f;
+                int btx = 0, bty = 0;
+                world_->getLocalPos(bx, by, btx, bty);
+                if (autocollect_) autocollect_->triggerPassThroughCollect(bx, by);
+                else actions_->checkPassThroughCollect(bx, by);
             }
             // Tank 8 (or 14): Dropped Item Event (Spawn / Collect)
             else if ((tank_type == PACKET_ITEM_CHANGE_OBJECT || tank_type == 14) && pkt.payload.size() >= sizeof(GameUpdatePacket)) {
@@ -588,6 +600,17 @@ void BotInstance::setupPacketHandlers() {
                     }
                     world_->addOrUpdateDroppedItem(uid, item_id, item_pkt.count1 > 0 ? item_pkt.count1 : 1, item_pkt.pos_x, item_pkt.pos_y);
                     Logger::log("[BOT #", id_, "] 📦 Dropped Item baru: ID=", item_id, " UID=", uid, " Count=", (int)item_pkt.count1, " Pos=(", item_pkt.pos_x, ", ", item_pkt.pos_y, ")");
+
+                    // Auto-collect jika item jatuh tepat di dekat posisi bot (spawn at feet / sehabis memukul blok)
+                    float bx = 0.0f, by = 0.0f;
+                    int btx = 0, bty = 0;
+                    world_->getLocalPos(bx, by, btx, bty);
+                    float dx = item_pkt.pos_x - bx;
+                    float dy = item_pkt.pos_y - by;
+                    if (dx * dx + dy * dy <= (44.0f * 44.0f)) {
+                        if (autocollect_) autocollect_->triggerPassThroughCollect(bx, by);
+                        else actions_->checkPassThroughCollect(bx, by);
+                    }
                 }
             }
             // Tank 9: Inventory
@@ -668,6 +691,7 @@ void BotInstance::setupPacketHandlers() {
                     else if (fn.find("OnSetPos") != std::string::npos) {
                         if (vars.size() > 1 && vars[1].type == 3) {
                             world_->setLocalPos(vars[1].float_val, vars[1].float_val2);
+                            if (autocollect_) autocollect_->triggerPassThroughCollect(vars[1].float_val, vars[1].float_val2);
                         }
                     }
                     else if (fn.find("OnRemove") != std::string::npos) {

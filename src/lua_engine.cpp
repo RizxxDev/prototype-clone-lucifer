@@ -659,6 +659,14 @@ void LuaEngine::registerBothaxApi(lua_State* L) {
     lua_setglobal(L, "CollectNearby");
     lua_pushcfunction(L, botCollectNearby);
     lua_setglobal(L, "collectNearby");
+    lua_pushcfunction(L, botCollectObject);
+    lua_setglobal(L, "CollectObject");
+    lua_pushcfunction(L, botCollectObject);
+    lua_setglobal(L, "collectObject");
+    lua_pushcfunction(L, botCollectByID);
+    lua_setglobal(L, "CollectByID");
+    lua_pushcfunction(L, botCollectByID);
+    lua_setglobal(L, "collectByID");
 
     // 4. Encryption & Hashing
     lua_pushcfunction(L, bothaxEncrypt);
@@ -721,6 +729,14 @@ void LuaEngine::registerBothaxApi(lua_State* L) {
     lua_setglobal(L, "GetObjectList");
     lua_pushcfunction(L, bothaxGetObjectList);
     lua_setglobal(L, "getObjectList");
+    lua_pushcfunction(L, bothaxGetObjectList);
+    lua_setglobal(L, "GetObjects");
+    lua_pushcfunction(L, bothaxGetObjectList);
+    lua_setglobal(L, "getObjects");
+    lua_pushcfunction(L, bothaxGetObject);
+    lua_setglobal(L, "GetObject");
+    lua_pushcfunction(L, bothaxGetObject);
+    lua_setglobal(L, "getObject");
     lua_pushcfunction(L, bothaxGetPlayer);
     lua_setglobal(L, "GetPlayer");
     lua_pushcfunction(L, bothaxGetPlayer);
@@ -927,6 +943,16 @@ void LuaEngine::registerLuciferApi(lua_State* L) {
     lua_setfield(L, -2, "collect");
     lua_pushcfunction(L, botCollectNearby);
     lua_setfield(L, -2, "collectNearby");
+    lua_pushcfunction(L, botCollectObject);
+    lua_setfield(L, -2, "collectObject");
+    lua_pushcfunction(L, botCollectByID);
+    lua_setfield(L, -2, "collectByID");
+    lua_pushcfunction(L, bothaxGetObjectList);
+    lua_setfield(L, -2, "getObjects");
+    lua_pushcfunction(L, bothaxGetObjectList);
+    lua_setfield(L, -2, "getObjectList");
+    lua_pushcfunction(L, bothaxGetObject);
+    lua_setfield(L, -2, "getObject");
     lua_pushcfunction(L, botDrop);
     lua_setfield(L, -2, "drop");
     lua_pushcfunction(L, botTrash);
@@ -1019,6 +1045,16 @@ void LuaEngine::registerLuciferApi(lua_State* L) {
     lua_pushvalue(L, -1);
     lua_setglobal(L, "bot");
     lua_setglobal(L, "Lucifer");
+
+    // Lucifer global shortcuts
+    lua_pushcfunction(L, bothaxGetObjectList);
+    lua_setglobal(L, "getObjects");
+    lua_pushcfunction(L, bothaxGetObject);
+    lua_setglobal(L, "getObject");
+    lua_pushcfunction(L, botCollectObject);
+    lua_setglobal(L, "collectObject");
+    lua_pushcfunction(L, botCollectByID);
+    lua_setglobal(L, "collectByID");
 }
 
 // ============================================================
@@ -1684,6 +1720,19 @@ int LuaEngine::bothaxGetObjectList(lua_State* L) {
         lua_setfield(L, -2, "y");
         lua_setfield(L, -2, "pos");
 
+        lua_pushnumber(L, items[i].x);
+        lua_setfield(L, -2, "x");
+        lua_pushnumber(L, items[i].y);
+        lua_setfield(L, -2, "y");
+        lua_pushnumber(L, items[i].x);
+        lua_setfield(L, -2, "x_pixel");
+        lua_pushnumber(L, items[i].y);
+        lua_setfield(L, -2, "y_pixel");
+        lua_pushinteger(L, static_cast<lua_Integer>(items[i].x / 32.0f));
+        lua_setfield(L, -2, "tile_x");
+        lua_pushinteger(L, static_cast<lua_Integer>(items[i].y / 32.0f));
+        lua_setfield(L, -2, "tile_y");
+
         lua_pushinteger(L, items[i].count);
         lua_setfield(L, -2, "amount");
         lua_pushinteger(L, items[i].count);
@@ -1699,6 +1748,68 @@ int LuaEngine::bothaxGetObjectList(lua_State* L) {
 
         lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
     }
+    return 1;
+}
+
+int LuaEngine::bothaxGetObject(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
+    LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+
+    if (!self) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    int base = (lua_isuserdata(L, 1) || (lua_istable(L, 1) && !lua_isnoneornil(L, 2))) ? 2 : 1;
+    uint32_t target_oid = static_cast<uint32_t>(luaL_checkinteger(L, base));
+
+    auto items = self->activeWorld().getDroppedItems();
+    for (const auto& item : items) {
+        if (item.uid == target_oid) {
+            lua_newtable(L);
+            lua_pushinteger(L, item.id);
+            lua_setfield(L, -2, "id");
+            lua_pushinteger(L, item.id);
+            lua_setfield(L, -2, "itemid");
+
+            lua_newtable(L);
+            lua_pushnumber(L, item.x);
+            lua_setfield(L, -2, "x");
+            lua_pushnumber(L, item.y);
+            lua_setfield(L, -2, "y");
+            lua_setfield(L, -2, "pos");
+
+            lua_pushnumber(L, item.x);
+            lua_setfield(L, -2, "x");
+            lua_pushnumber(L, item.y);
+            lua_setfield(L, -2, "y");
+            lua_pushnumber(L, item.x);
+            lua_setfield(L, -2, "x_pixel");
+            lua_pushnumber(L, item.y);
+            lua_setfield(L, -2, "y_pixel");
+            lua_pushinteger(L, static_cast<lua_Integer>(item.x / 32.0f));
+            lua_setfield(L, -2, "tile_x");
+            lua_pushinteger(L, static_cast<lua_Integer>(item.y / 32.0f));
+            lua_setfield(L, -2, "tile_y");
+
+            lua_pushinteger(L, item.count);
+            lua_setfield(L, -2, "amount");
+            lua_pushinteger(L, item.count);
+            lua_setfield(L, -2, "count");
+
+            lua_pushinteger(L, 0);
+            lua_setfield(L, -2, "flags");
+
+            lua_pushinteger(L, item.uid);
+            lua_setfield(L, -2, "oid");
+            lua_pushinteger(L, item.uid);
+            lua_setfield(L, -2, "uid");
+            return 1;
+        }
+    }
+
+    lua_pushnil(L);
     return 1;
 }
 
@@ -3297,6 +3408,58 @@ int LuaEngine::botCollectNearby(lua_State* L) {
     float r = static_cast<float>(luaL_optnumber(L, base, 4.0));
     int collected = self->activeActions().collectNearby(r);
     lua_pushinteger(L, collected);
+    return 1;
+}
+
+int LuaEngine::botCollectObject(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
+    LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+    if (!self) {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+
+    int base = (lua_isuserdata(L, 1) || (lua_istable(L, 1) && !lua_isnoneornil(L, 2))) ? 2 : 1;
+    uint32_t target_uid = 0;
+
+    if (lua_istable(L, base)) {
+        lua_getfield(L, base, "oid");
+        if (lua_isnumber(L, -1)) {
+            target_uid = static_cast<uint32_t>(lua_tointeger(L, -1));
+        } else {
+            lua_pop(L, 1);
+            lua_getfield(L, base, "uid");
+            if (lua_isnumber(L, -1)) {
+                target_uid = static_cast<uint32_t>(lua_tointeger(L, -1));
+            }
+        }
+        lua_pop(L, 1);
+    } else {
+        target_uid = static_cast<uint32_t>(luaL_checkinteger(L, base));
+    }
+
+    float range = static_cast<float>(luaL_optnumber(L, base + 1, -1.0));
+    bool ok = self->activeActions().collectObject(target_uid, range);
+    lua_pushboolean(L, ok);
+    return 1;
+}
+
+int LuaEngine::botCollectByID(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "__LUA_ENGINE_INSTANCE");
+    LuaEngine* self = reinterpret_cast<LuaEngine*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+    if (!self) {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+
+    int base = (lua_isuserdata(L, 1) || (lua_istable(L, 1) && !lua_isnoneornil(L, 2))) ? 2 : 1;
+    uint16_t item_id = static_cast<uint16_t>(luaL_checkinteger(L, base));
+    float range = static_cast<float>(luaL_optnumber(L, base + 1, -1.0));
+
+    int count = self->activeActions().collectByID(item_id, range);
+    lua_pushboolean(L, count > 0);
     return 1;
 }
 

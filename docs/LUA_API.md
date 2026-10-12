@@ -91,14 +91,18 @@ Engine ini mendukung:
 #### 6. `WorldObject` (Item Terapung / Dropped Item)
 ```lua
 {
-    id     = 242,                  -- Item ID barang
-    itemid = 242,                  -- Alias itemid (Lucifer/Bothax)
-    amount = 5,                    -- Jumlah tumpukan item
-    count  = 5,                    -- Alias count (Lucifer/Bothax)
-    flags  = 0,                    -- Object bitflags
-    oid    = 18,                   -- Object UID unik (digunakan untuk collect)
-    uid    = 18,                   -- Alias uid (Lucifer/Bothax)
-    pos    = { x = 320.0, y = 480.0 } -- Posisi pixel
+    id      = 242,                 -- Item ID barang
+    itemid  = 242,                 -- Alias itemid (Lucifer/Bothax)
+    amount  = 5,                   -- Jumlah tumpukan item
+    count   = 5,                   -- Alias count (Lucifer/Bothax)
+    flags   = 0,                   -- Object bitflags
+    oid     = 18,                  -- Object UID unik (digunakan untuk collect)
+    uid     = 18,                  -- Alias uid (Lucifer/Bothax)
+    pos     = { x = 320.0, y = 480.0 }, -- Posisi pixel
+    tile_x  = 10,                  -- Posisi koordinat tile X (pos.x // 32)
+    tile_y  = 15,                  -- Posisi koordinat tile Y (pos.y // 32)
+    x_pixel = 320.0,               -- Posisi pixel X
+    y_pixel = 480.0                -- Posisi pixel Y
 }
 ```
 
@@ -273,8 +277,16 @@ Semua fungsi di bawah ini dapat dipanggil dengan **PascalCase** (standar Bothax)
 | 44 | `inv(item_id)` / `GetItemCount(item_id)` | `getItemCount` | `integer` | Mengambil jumlah item spesifik di dalam tas inventaris bot. |
 | 45 | `Collect([uid_or_radius_or_obj])` | `collect` | `integer` | Mengambil dropped item via UID (`Collect(oid)`), objek tabel (`Collect(obj)`), atau fallback radius sekitar. |
 | 46 | `CollectNearby([radius])` | `collectNearby` | `integer` | Mengambil semua dropped item dalam jangkauan radius tertentu (default: 4.0 tile). |
+| 47 | `getObjects()` / `GetObjects()` | `getObjects` | `WorldObject[]` | Mengambil daftar seluruh item floating di world (alias modern dari `GetObjectList`). |
+| 48 | `getObject(oid)` / `GetObject(oid)` | `getObject` | `WorldObject \| nil` | Mengambil satu objek floating berdasarkan UID objek (`oid`). |
+| 49 | `collectObject(oid, [range])` | `collectObject` | `boolean` | Mengambil dropped item spesifik berdasarkan UID. |
+| 50 | `collectByID(item_id, [range])` | `collectByID` | `boolean` | Mencari dan mengambil dropped item terdekat berdasarkan Item ID. |
 
-#### Utilitas Tambahan
+#### Utilitas Tambahan & Metode `bot`
+- `bot:getObjects()` / `getObjects()`: Mengembalikan daftar seluruh item floating (`WorldObject[]`).
+- `bot:getObject(oid)` / `getObject(oid)`: Mengembalikan objek floating dengan UID tertentu.
+- `bot:collectObject(oid, [range])` / `collectObject(oid, [range])`: Mengambil objek UID tertentu (dengan opsi auto walk jika di luar range).
+- `bot:collectByID(item_id, [range])` / `collectByID(item_id, [range])`: Mengambil item dengan ID tertentu.
 - `ChangeValue(key, value)` / `changeValue`: Mengubah cheat internal (`modfly`, `noname`, `canseeghost`, `speed`, `punchrange`, `buildrange`, `autoreconnect`).
 - `inv(id)` / `GetItemCount(id)` / `bot:getItemCount(id)` / `bot:inv(id)`: Mengembalikan jumlah item di inventory.
 - `Collect(oid)` / `Collect(obj)` / `Collect([radius])` / `bot:collect(...)`: Mengambil dropped item di world. Mendukung pengiriman UID langsung, tabel objek `obj` dari `GetObjectList()`, atau radius scan.

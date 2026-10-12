@@ -104,6 +104,7 @@ private:
     static int bothaxGetNPC(lua_State* L);
     static int bothaxGetNPCList(lua_State* L);
     static int bothaxGetObjectList(lua_State* L);
+    static int bothaxGetObject(lua_State* L);
     static int bothaxGetPlayer(lua_State* L);
     static int bothaxGetPlayerInfo(lua_State* L);
     static int bothaxGetPlayerItems(lua_State* L);
@@ -149,6 +150,8 @@ private:
     static int botEnter(lua_State* L);
     static int botCollect(lua_State* L);
     static int botCollectNearby(lua_State* L);
+    static int botCollectObject(lua_State* L);
+    static int botCollectByID(lua_State* L);
     static int botDrop(lua_State* L);
     static int botTrash(lua_State* L);
     static int botRespawn(lua_State* L);
