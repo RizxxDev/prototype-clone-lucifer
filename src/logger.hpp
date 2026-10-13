@@ -10,6 +10,7 @@
 #include <vector>
 #include <mutex>
 #include <algorithm>
+#include <fstream>
 
 class Logger {
 public:
@@ -45,6 +46,12 @@ public:
         std::string line = ss.str();
 
         std::cout << line << std::endl;
+
+        static std::ofstream s_logfile("bot.log", std::ios::app);
+        if (s_logfile.is_open()) {
+            s_logfile << line << "\n";
+            s_logfile.flush();
+        }
 
         if (history.size() >= MAX_HISTORY) {
             history.erase(history.begin(), history.begin() + 100);

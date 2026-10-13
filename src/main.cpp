@@ -533,33 +533,81 @@ int main(int argc, char** argv) {
                     world.getLocalPos(bx, by, btx, bty);
                     autocollect.triggerPassThroughCollect(bx, by);
                 }
-                // Tank packet 8 (or 14): Dropped Item Event (Spawn / Collect)
-                else if ((tank_type == PACKET_ITEM_CHANGE_OBJECT || tank_type == 14) && pkt.payload.size() >= sizeof(GameUpdatePacket)) {
+                // Tank packet 14 & Tank 8 (Alternate GTPS Object Event): Dropped Item Event (Spawn / Collect)
+                else if (((tank_type == PACKET_ITEM_CHANGE_OBJECT || tank_type == 14) || 
+                          (tank_type == 8 && pkt.payload.size() >= sizeof(GameUpdatePacket))) && 
+                         pkt.payload.size() >= sizeof(GameUpdatePacket)) {
                     GameUpdatePacket item_pkt;
                     std::memcpy(&item_pkt, pkt.payload.data(), sizeof(GameUpdatePacket));
                     
-                    if (item_pkt.net_id >= 0 && item_pkt.count1 == 0) {
-                        uint32_t collected_uid = static_cast<uint32_t>(item_pkt.target_net_id > 0 ? item_pkt.target_net_id : item_pkt.main_data);
-                        world.removeDroppedItem(collected_uid);
-                        world.removeDroppedItemByPos(item_pkt.pos_x, item_pkt.pos_y, 24.0f);
-                        Logger::log("💨 Dropped Item terambil/hilang: UID=", collected_uid, " Pos=(", item_pkt.pos_x, ", ", item_pkt.pos_y, ")");
-                    } else {
-                        uint32_t uid = static_cast<uint32_t>(item_pkt.target_net_id > 0 ? item_pkt.target_net_id : (item_pkt.net_id > 0 ? item_pkt.net_id : item_pkt.main_data));
-                        uint16_t item_id = static_cast<uint16_t>(item_pkt.main_data > 0 ? item_pkt.main_data : item_pkt.target_net_id);
-                        if (uid == static_cast<uint32_t>(-1) || uid == 0) {
-                            static std::atomic<uint32_t> s_auto_uid{1000};
-                            uid = ++s_auto_uid;
-                        }
-                        world.addOrUpdateDroppedItem(uid, item_id, item_pkt.count1 > 0 ? item_pkt.count1 : 1, item_pkt.pos_x, item_pkt.pos_y);
-                        Logger::log("📦 Dropped Item baru: ID=", item_id, " UID=", uid, " Count=", (int)item_pkt.count1, " Pos=(", item_pkt.pos_x, ", ", item_pkt.pos_y, ")");
+                    Logger::log("[DEBUG TANK 14] net_id=", item_pkt.net_id,
+                                " target=", item_pkt.target_net_id,
+                                " main_data=", item_pkt.main_data,
+                                " flags=", item_pkt.flags,
+                                " float_var=", item_pkt.float_var,
+                                " int_x=", item_pkt.int_x,
+                                " int_y=", item_pkt.int_y,
+                                " pos=(", item_pkt.pos_x, ", ", item_pkt.pos_y, ")",
+                                " count1=", (int)item_pkt.count1);
 
-                        // Auto-collect jika item jatuh tepat di dekat posisi bot (spawn at feet / sehabis memukul blok)
+                    // GTPS Item Lifecycle:
+                    // 1. Spawning / Dropped on ground: pos_x > 0 || pos_y > 0 || count1 > 0 (memiliki koordinat fisik di world)
+                    // 2. Collected / Despawned: pos_x == 0 && pos_y == 0 (diambil oleh player atau dihapus dari world)
+                    bool is_on_ground = (item_pkt.pos_x > 0.0f || item_pkt.pos_y > 0.0f || item_pkt.count1 > 0);
+
+                    if (!is_on_ground) {
+                        uint32_t collected_uid = static_cast<uint32_t>(
+                            item_pkt.main_data > 0 ? item_pkt.main_data : 
+                            (item_pkt.target_net_id > 0 ? item_pkt.target_net_id : 0)
+                        );
+                        if (collected_uid > 0) {
+                            world.removeDroppedItem(collected_uid);
+                            actions.clearCollectCooldown(collected_uid);
+                        }
+                        Logger::log("💨 Dropped Item terambil/hilang: UID=", collected_uid, " CollectorNetID=", item_pkt.net_id);
+                    } else {
+                        uint16_t item_id = static_cast<uint16_t>(item_pkt.main_data > 0 ? item_pkt.main_data : 0);
+                        uint8_t count = item_pkt.float_var > 0.0f ? static_cast<uint8_t>(item_pkt.float_var) : (item_pkt.count1 > 0 ? item_pkt.count1 : 1);
+
+                        int dropper_net = item_pkt.target_net_id;
+                        bool is_player_netid = false;
+                        if (dropper_net > 0) {
+                            if (dropper_net == world.getLocalNetId()) {
+                                is_player_netid = true;
+                            } else {
+                                auto players = world.getPlayers();
+                                for (const auto& p : players) {
+                                    if (p.net_id == dropper_net) {
+                                        is_player_netid = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        uint32_t uid = 0;
+                        uint32_t last_uid = world.getLastDroppedUid();
+
+                        if (dropper_net > 0 && !is_player_netid && static_cast<uint32_t>(dropper_net) > last_uid) {
+                            uid = static_cast<uint32_t>(dropper_net);
+                            world.setLastDroppedUid(uid);
+                        } else {
+                            uid = world.allocateNextDroppedUid();
+                        }
+
+                        world.addOrUpdateDroppedItem(uid, item_id, count, item_pkt.pos_x, item_pkt.pos_y);
+                        Logger::log("[SCANNER] 📦 Inbound Drop Packet Type=", (int)tank_type, 
+                                    " AssignedUID=", uid, " (LastUID=", world.getLastDroppedUid(), 
+                                    ") ID=", item_id, " Count=", (int)count, 
+                                    " DropperNetID=", dropper_net,
+                                    " Pos=(", item_pkt.pos_x, ", ", item_pkt.pos_y, ")");
+
                         float bx = 0.0f, by = 0.0f;
                         int btx = 0, bty = 0;
                         world.getLocalPos(bx, by, btx, bty);
                         float dx = item_pkt.pos_x - bx;
                         float dy = item_pkt.pos_y - by;
-                        if (dx * dx + dy * dy <= (44.0f * 44.0f)) {
+                        if (dx * dx + dy * dy <= (96.0f * 96.0f)) {
                             autocollect.triggerPassThroughCollect(bx, by);
                         }
                     }
@@ -592,6 +640,10 @@ int main(int argc, char** argv) {
                         }
 
                         std::string fn = vars[0].str_val;
+                        if (fn != "OnSetPos" && fn != "OnSetBumperCoinValues") {
+                            Logger::log("  📩 Server Call: '", fn, "' (vars=", vars.size(), 
+                                        (vars.size() > 1 && vars[1].type == 2 ? (" arg1='" + vars[1].str_val + "'") : ""), ")");
+                        }
 
                         auto get_vint = [](const Variant& v) -> int {
                             if (v.type == 9) return v.int_val;

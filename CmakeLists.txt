@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "Minimum policy version")
+set(CMAKE_POLICY_VERSION_MINIMUM 3.10 CACHE STRING "Minimum policy version" FORCE)
+
 project(gtps_bot CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -7,6 +8,12 @@ add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
 
 # ---- Dependencies ----
 include(FetchContent)
+
+# Suppress FetchContent_Populate deprecation warning (CMP0169) in CMake 3.30+ / 4.x
+set(CMAKE_POLICY_DEFAULT_CMP0169 OLD)
+if(POLICY CMP0169)
+    cmake_policy(SET CMP0169 OLD)
+endif()
 
 # ENet
 FetchContent_Declare(
@@ -40,6 +47,9 @@ FetchContent_Declare(
 )
 FetchContent_GetProperties(imgui)
 if(NOT imgui_POPULATED)
+    if(POLICY CMP0169)
+        cmake_policy(SET CMP0169 OLD)
+    endif()
     FetchContent_Populate(imgui)
     add_library(imgui STATIC
         ${imgui_SOURCE_DIR}/imgui.cpp
@@ -64,6 +74,9 @@ FetchContent_Declare(
 )
 FetchContent_GetProperties(lua)
 if(NOT lua_POPULATED)
+    if(POLICY CMP0169)
+        cmake_policy(SET CMP0169 OLD)
+    endif()
     FetchContent_Populate(lua)
     file(GLOB LUA_SOURCES "${lua_SOURCE_DIR}/*.c")
     list(REMOVE_ITEM LUA_SOURCES "${lua_SOURCE_DIR}/lua.c" "${lua_SOURCE_DIR}/luac.c" "${lua_SOURCE_DIR}/onelua.c")

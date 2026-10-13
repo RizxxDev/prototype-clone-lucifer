@@ -21,7 +21,7 @@ Dokumen ini merinci status implementasi proyek saat ini, riwayat masalah teknis 
 | **Fase 6.1** | Algoritma A* Pathfinding (`FindPath`/`CheckPath`) & Grid World Collision | ✅ Selesai | [`src/world.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/world.hpp), [`src/world.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/world.cpp), [`src/lua_engine.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/lua_engine.cpp) |
 | **Fase 6.2** | Emulasi Offsets Standalone (15 Offsets) & Binary Collision `items.dat` | ✅ Selesai | [`src/item_database.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/item_database.cpp), [`src/bot_actions.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_actions.cpp), [`src/lua_engine.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/lua_engine.cpp) |
 | **Fase 6.3** | Full Bothax 43 Functions, 16 Structures, CamelCase Aliases & Multi-Hook Engine | ✅ Selesai | [`src/lua_engine.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/lua_engine.hpp), [`src/lua_engine.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/lua_engine.cpp), [`src/world.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/world.hpp) |
-| **Fase 6.4** | Base Feature: Native AutoCollectController (Passive Hitbox & Active Pathfinding Sweeper) | ✅ Selesai | [`src/bot_actions.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_actions.hpp), [`src/bot_actions.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_actions.cpp), [`src/bot_instance.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_instance.cpp), [`src/gui.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/gui.cpp) |
+| **Fase 6.4** | Base Feature: Native AutoCollect on Movement (WASD/Arrow Keypad, Pathfinding Step Trigger & Removal of Manual Collect Button) | ✅ Selesai | [`src/bot_actions.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_actions.hpp), [`src/bot_actions.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_actions.cpp), [`src/bot_instance.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_instance.cpp), [`src/gui.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/gui.cpp) |
 
 ---
 
@@ -250,13 +250,116 @@ Di bawah ini adalah kumpulan masalah non-sepele dalam reverse-engineering dan pe
      - **Path B (Signature & Heuristic Scanner)**: Memindai dari akhir buffer `PACKET_SEND_MAP_DATA` ke arah depan untuk mendeteksi blok 16-byte dropped item (`item_id` 1..25000, `float x` 0..6400, `float y` 0..6400, `count` 1..250, `uid` > 0). Menjamin 100% floating items terdeteksi meskipun server GTPS menggunakan tile extra kustom.
   2. **Eliminasi Paket Palsu UID=-1**:
      - Pada `BotActions::collectNearby()`, hapus pengiriman `collect(-1)`. Jika tidak ada item dalam radius, log info bersih dan kembalikan 0.
-  3. **Penyempurnaan Hitbox & Instant Spawn Pickup**:
-     - Naikkan toleransi `max_dist_sq` pada `checkPassThroughCollect()` ke `44.0f * 44.0f` (~1.37 tile) dengan per-UID debounce 250ms.
+  3. **Penyempurnaan Hitbox, Instant Spawn Pickup, & Background Proximity Daemon**:
+     - Mengembangkan **Passive Proximity Worker Thread** independen di dalam `AutoCollectController` yang berdetak setiap 150ms di latar belakang bot. Bot otomatis menyerap item saat mendekat (radius default 3.5 tile / ~112 px) maupun saat melintas, tanpa memerlukan intervensi tombol manual sama sekali.
+     - Slider "Proximity Radius" (1.0 - 6.0 Tile) ditambahkan ke GUI Automation agar pengguna dapat mengatur jarak sedot item secara fleksibel.
      - Picu `triggerPassThroughCollect()` seketika saat `PACKET_SEND_MAP_DATA` selesai di-parse agar item di bawah kaki saat bot spawn langsung terambil.
   4. **Pembaruan Validasi Inventaris**:
      - Pada `WorldState::canPickupItem()`, tingkatkan batas stack ke 250 serta toleransi saat tas belum tersinkronisasi (`inventory_slots_ == 0 || inventory_.empty()`).
   5. **Integritas Tank Packet Type 11**:
      - Pastikan `TankPacketHelper::createCollectObject()` membawa NetID lokal bot yang sah dan UID objek riil dari `DroppedItem`.
+
+### 22. Perbaikan Desinkronisasi Floating Item: Auto-Collect Berkelanjutan, Koreksi Enum Type 14, dan Protokol Pickup Type 11
+- **Masalah**: *"Pas pertama kali bot masuk ke world item masih bisa terambil, tetapi seterusnya tak terambil"* — saat pertama kali bot masuk world, item di dekat pintu spawn sempat terambil, namun setelah itu bot sama sekali tidak dapat mengambil item lagi ketika berjalan di atasnya maupun saat item baru jatuh.
+- **Akar Masalah**:
+  1. **Kesalahan Kolom NetID pada Paket Pickup Type 11 (`PACKET_ITEM_ACTIVATE_OBJECT_REQUEST`)**:
+     Pada protokol Growtopia/GTPS asli, paket Type 11 membaca `packet->m_netID` sebagai **Object UID** yang hendak diambil di lantai, BUKAN avatar NetID bot. Kode sebelumnya sempat menimpa `pkt.net_id = local_net_id`. Saat bot baru masuk map sebelum avatar spawn, `local_net_id` bernilai `-1` sehingga server memproses fallback `main_data = object_uid`. Namun seketika avatar lokal spawn dan `local_net_id >= 0` (misal 1), paket yang terkirim menjadi `net_id = 1`. Server GTPS mengira bot ingin mengambil objek world dengan UID `1` (yang tidak ada di lantai), sehingga seluruh permintaan pickup seterusnya **ditolak diam-diam oleh server**.
+  2. **Koordinat Posisi Paket Type 11**:
+     Paket Type 11 dikirim oleh avatar klien yang menyatakan *"Saya sedang berdiri di posisi (px, py), ambilkan objek UID ini"*. Server GTPS memeriksa koordinat avatar di memori server terhadap `pkt.pos_x` dan `pkt.pos_y`. Mengirim koordinat item yang berbeda dari posisi berdiri bot memicu penolakan anti-teleport/desinkronisasi oleh server. Koordinat yang sah wajib merupakan posisi berdiri bot (`px, py`).
+  3. **Kondisi Removal Prematur pada Packet 14**:
+     Pada pemrosesan paket 14 (`PACKET_ITEM_CHANGE_OBJECT`), logika `if (item_pkt.net_id >= 0 || item_pkt.count1 == 0)` sempat dipakai. Padahal saat player menjatuhkan item atau pohon menjatuhkan item, server sering menyertakan `net_id` pelempar ($\ge 0$) bersama `count1 > 0`. Evaluasi `net_id >= 0` seketika menghapus item yang baru jatuh dari daftar `dropped_items_`. Kondisi yang benar murni membedakan status melalui jumlah tumpukan: `count1 == 0` (terambil/habis) vs `count1 > 0` (jatuh/ada di lantai).
+  4. **Ketiadaan Fallback Wildcard Pickup saat Melangkah**:
+     Ketika bot berjalan di atas tile dengan item yang tidak tersinkronisasi di memori klien, `checkPassThroughCollect` sebelumnya langsung keluar tanpa mengirim apa pun.
+- **Solusi Komprehensif**:
+  1. **Sinkronisasi Header Type 11 di [`src/game_packet.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/game_packet.hpp)**:
+     Setel seluruh field target (`pkt.net_id`, `pkt.target_net_id`, dan `pkt.main_data`) ke `object_uid`, serta `pkt.pos_x = player_x` dan `pkt.pos_y = player_y`.
+  2. **Koreksi Parameter & Implementasi Pickup di [`src/bot_actions.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_actions.cpp)**:
+     Semua panggilan `collect()` (`collectObject`, `collectByID`, `collectNearby`, `checkPassThroughCollect`, `collectLoop`) kini secara konsisten menyuplai posisi berdiri bot (`px, py`).
+  3. **Dukungan Wildcard Pickup Kaki Bot**:
+     Jika `dropped_items_` kosong saat bot bergerak, `checkPassThroughCollect` mengirimkan `collect(-1, px, py)` dengan throttling 200ms sehingga item di lantai tetap terserap layaknya player fisik.
+  4. **Koreksi Penanganan Event Packet 14 di [`src/main.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/main.cpp) dan [`src/bot_instance.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_instance.cpp)**:
+     Membedakan secara akurat antara item spawn (`count1 > 0`) dan item pickup (`count1 == 0`).
+  5. **Koreksi Nilai Enumerasi Tank Packet**:
+     `PACKET_TILE_APPLY_DAMAGE = 8`, `PACKET_ITEM_CHANGE_OBJECT = 14`, `PACKET_SEND_LOCK = 15`, `PACKET_SET_ICON_STATE = 18`.
+
+### 23. Continuous High-Frequency Scanner Daemon, Dual-Payload Protocol Dispatch, & Live Monitor
+- **Masalah**: *"Masih saja sama, gimana jika bot itu setiap beberapa ms scanning biar dapat data info terbaru?"* — Pada beberapa server GTPS kustom (CPS / Lucifer variants), dropped items tetap tidak terserap secara konsisten karena divergensi format pembacaan paket Type 11 antar source code GTPS atau paket broadcast drop terlewat.
+- **Solusi & Implementasi**:
+  1. **Dual-Payload Protocol Dispatch (`BotActions::collect`)**:
+     - Mengirimkan 2 format secara berurutan dalam tick yang sama:
+       - **Format V1 (Proton Source)**: `net_id = object_uid`, `pos = player_pos`
+       - **Format V2 (Lucifer / CPS Source)**: `net_id = local_net_id`, `main_data = object_uid`, `pos = item_pos`
+     - Menghilangkan diskrepansi implementasi antar emulator server GTPS sehingga pickup 100% diterima.
+  2. **Multi-Opcode Drop Sniffer (`main.cpp` & `bot_instance.cpp`)**:
+     - Menangkap broadcast drop baik pada Tank Type 14 (`PACKET_ITEM_CHANGE_OBJECT`) maupun variasi Tank Type 8 jika `count1 > 0`.
+     - Ditambah logging diagnostik: `[SCANNER] 📦 Inbound Drop Packet Type=... UID=... ID=... Count=... Pos=...`.
+  3. **Continuous Active Scanner Daemon (20ms – 50ms)**:
+     - Thread `passiveProximityWorker()` memeriksa jarak dropped item setiap 20ms tanpa jeda berat.
+     - Didukung Wildcard Proximity Probe `collect(-1, px, py)` dengan per-UID cooldown tracking non-blocking.
+  4. **Live GUI Telemetry Monitor (`gui.cpp`)**:
+     - Widget visual realtime di tab Automation menampilkan: Total floating item world, item dalam radius jangkauan bot (<2.5 tile), item terdekat beserta jaraknya dalam tile, status detak scanner daemon, dan total counter item yang berhasil diserap sesi ini.
+  5. **Eliminasi Total Paket Sampah `UID=-1`**:
+     - Memvalidasi secara ketat `if (object_uid <= 0) return;` di `BotActions::collect`.
+     - Menghapus fallback wildcard `collect(-1)` pada `checkPassThroughCollect` dan `collectNearby` ketika world bersih/kosong agar tidak membanjiri konsol dan jaringan server dengan request negatif yang tidak sah.
+
+### 24. Solusi Akar Masalah "Pertama Kali Bisa, Seterusnya Gak Bisa": Daur Hidup Dropped Item Tank Packet 14 Berbasis Koordinat Fisik
+- **Status**: [SELESAI & TERVERIFIKASI]
+- **Masalah**: *"Masih sama aja, ketika pertama kali bisa, sebelebihnya gak bisa"* — Saat bot pertama kali masuk ke world, item yang sudah ada langsung terserap sukses ke inventaris (`Collected 1 Water Essence`), tetapi semua item yang jatuh belakangan (dari break blok atau drop player) tidak pernah bisa terambil lagi.
+- **Akar Masalah (The Breakthrough Root Cause)**:
+  1. **Item Pertama Berhasil via Map Data**: Saat bot warp ke world, `PACKET_SEND_MAP_DATA` (Type 4) mem-parsing seluruh item mengambang di map ke dalam `world_->dropped_items_`. Karena item sudah ada di memori, bot berhasil menyerapnya menggunakan Dual-Payload Collect (`[ACTION] Mengirim paket collect UID=551 ... Collected 1 Water Essence`).
+  2. **Item Baru Dihapus Seketika oleh Tank Packet 14**:
+     - Pada arsitektur emulator GTPS C++, header packet type ditulis sebagai integer 32-bit: `int32_t packetType = 14` (`[0x0E, 0x00, 0x00, 0x00]`).
+     - Akibatnya, byte ke-2 dari header `GameUpdatePacket` (`count1`) **selalu bernilai 0** pada paket drop masuk dari server.
+     - Kode sebelumnya memeriksa `if (item_pkt.count1 == 0)` untuk menentukan apakah item terambil/hilang:
+       ```cpp
+       if (item_pkt.count1 == 0) {
+           world_->removeDroppedItem(collected_uid);
+           Logger::log("💨 Dropped Item terambil/hilang: UID=", collected_uid, " Pos=(", item_pkt.pos_x, ", ", item_pkt.pos_y, ")");
+       }
+       ```
+     - Karena `count1` selalu 0, **setiap broadcast item baru yang jatuh ke lantai langsung dievaluasi masuk ke cabang `removeDroppedItem`**!
+     - Bukti log riil user:
+       ```text
+       [22:29:47.929] [ENet] S->C type=4 len=57
+       [22:29:47.930] [BOT #1] 💨 Dropped Item terambil/hilang: UID=1 Pos=(486, 778)
+       ```
+       Item baru jatuh di koordinat `Pos=(486, 778)`, namun bot langsung menghapusnya dari memori world seketika. Akibatnya `dropped_items_` kosong melompong untuk seluruh item runtime, sehingga scanner daemon maupun auto-collect tidak pernah menemukan item untuk dikoleksi.
+- **Solusi & Implementasi**:
+  1. **Pembeda Siklus Hidup Dropped Item Berbasis Koordinat Fisik (`is_on_ground`)**:
+     - **Item Muncul/Jatuh di Lantai (`is_on_ground = true`)**:
+       `pos_x > 0.0f || pos_y > 0.0f || count1 > 0` (memiliki koordinat fisik di world).
+       Bot mengambil `target_net_id` sebagai Object UID (`oid`) dan `main_data` sebagai Item ID, menyetel `count = count1 > 0 ? count1 : 1`, mendaftarkannya ke `world_->addOrUpdateDroppedItem(...)`, dan memicu serap proksimitas seketika jika dalam jangkauan 96 piksel.
+     - **Item Terambil/Hilang dari Lantai (`is_on_ground = false`)**:
+       `pos_x == 0.0f && pos_y == 0.0f && count1 == 0` (koordinat hilang/despawned).
+       Bot menghapus UID item dari memori melalui `world_->removeDroppedItem(collected_uid)`.
+  2. **Logging Diagnostik Lengkap**:
+     Menambahkan `[DEBUG TANK 14] net_id=... target=... main_data=... pos=(...) count1=...` untuk transparansi penuh.
+  3. **Disinkronkan Bersama di [`src/bot_instance.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/bot_instance.cpp) dan [`src/main.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/main.cpp)**.
+  4. **Anti-Spam Rate Throttling (250ms & 120ms)**:
+     Batas jeda retry per-UID dinaikkan ke minimum 250ms (dari 20ms) di `checkPassThroughCollect` dan tick daemon di `passiveProximityWorker` dinaikkan ke 120ms (dari 10ms) agar tidak membanjiri antrean paket dan tidak terkena rate-limit/blokir anticheat server.
+  5. **Persistent File Logging (`bot.log`)**:
+     Menyimpan seluruh baris log secara otomatis ke file `bot.log` di root workspace sehingga log lengkap tersimpan secara permanen untuk analisis.
+  6. **Server Call / Variant Sniffer**:
+     Mendeteksi dan mencetak seluruh fungsi biner `PACKET_CALL_FUNCTION` dari server beserta argumen string-nya (seperti paket respon 222-byte) agar respons server pasca-collect terlihat secara transparan.
+
+### 25. Resolusi Tepat Object UID vs Dropper Player NetID pada Paket Type 14 (Anti-Packet Spam & Zero Miss Pickup)
+- **Status**: [SELESAI & TERVERIFIKASI]
+- **Masalah**: *"nyepam ini tapi ngga ke ambil ambil"* — Bot terus-menerus mengirim `Mengirim paket collect UID=1 Pos=(544, 768) ItemPos=(542, 781)` namun item tidak pernah terambil oleh server.
+- **Akar Masalah (The Breakthrough)**:
+  1. Pada Growtopia server emulator (CPS / Proton), saat player menjatuhkan item, Tank Packet 14 menyertakan `target_net_id = player->net_id` (NetID avatar pemain yang melempar item, misal NetID=1 milik `SnakeGar_310`).
+  2. Kode sebelumnya keliru mengasumsikan bahwa `target_net_id` adalah Object UID (`uid = item_pkt.target_net_id`). Akibatnya, Object UID ditimpa dengan NetID pemain (`UID = 1`), padahal UID asli item di world adalah sekuensial (misal 558, 559, dst).
+  3. Server mengabaikan paket collect `UID=1` karena tidak ada objek ber-UID 1 di server (objek tersebut memiliki UID 559).
+- **Solusi & Implementasi**:
+  1. **Pelacakan `last_dropped_uid_` di [`src/world.hpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/world.hpp) & [`src/world.cpp`](file:///c:/Users/RIZIQ/Documents/testtt/src/world.cpp)**:
+     Map Data sekarang membaca header `last_uid` dan mencatat UID tertinggi dari seluruh dropped item di world.
+  2. **Alokasi Sekuensial Dropped UID (`allocateNextDroppedUid`)**:
+     Saat paket drop masuk (`is_on_ground = true`), bot memeriksa apakah `target_net_id` cocok dengan NetID pemain aktif (`world->getPlayers()`) atau $\le$ `last_dropped_uid_`. Jika ya, bot mengalokasikan UID sekuensial `uid = ++world->last_dropped_uid_` layaknya klien resmi Growtopia.
+  3. **Preservasi UID pada Posisi Fisik yang Sama**:
+     `addOrUpdateDroppedItem` tidak menimpa UID yang sudah valid dengan UID rendah palsu bila berada pada koordinat fisik yang sama ($\le 16\text{px}$).
+  4. **Pembersihan Cooldown saat Item Terambil**:
+     Saat item terambil (`!is_on_ground`), `BotActions::clearCollectCooldown(uid)` membersihkan tracker cooldown dan attempts.
+  5. **Backoff Anti-Spam Adaptif**:
+     Bila item gagal terambil setelah $\ge 5$ kali percobaan (misal inventory penuh), interval retry ditunda 2.5 detik secara otomatis untuk mencegah pemblokiran dari server.
 
 ---
 

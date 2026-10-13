@@ -83,15 +83,21 @@ struct GameUpdatePacket {
 | `3` | `PACKET_TILE_CHANGE_REQUEST` | C→S | Permintaan pukul blok (`hit`) atau pasang blok (`place`). |
 | `4` | `PACKET_SEND_MAP_DATA` | S→C | Data biner peta seluruh world (ukuran dan seluruh tile). |
 | `5` | `PACKET_SEND_TILE_UPDATE_DATA` | S→C | Pembaruan satu tile yang berubah di world. |
+| `6` | `PACKET_SEND_TILE_UPDATE_MULTIPLE`| S→C | Pembaruan multi-tile sekaligus. |
 | `7` | `PACKET_TILE_ACTIVATE_REQUEST`| C→S | Memasuki pintu / portal pada posisi tile bot. |
-| `8` | `PACKET_ITEM_CHANGE_OBJECT` | S→C | Item yang melayang/jatuh di world muncul atau diambil. |
+| `8` | `PACKET_TILE_APPLY_DAMAGE`    | C↔S | Efek kerusakan/pukulan pada blok (tile hit damage). |
 | `9` | `PACKET_SEND_INVENTORY_STATE` | S→C | Data tas inventaris pemain yang dikirim saat masuk world. |
-| `11`| `PACKET_ITEM_ACTIVATE_OBJECT_REQ` | C→S | Mengambil item yang mengambang di dekat bot (`collect`). |
-| `18`| `PACKET_SET_ICON_STATE` | S→C | Pembaruan efek visual status ikon. |
-| `20`| `PACKET_SET_CHARACTER_STATE` | S→C | Pembaruan pakaian, sayap, atau visual efek karakter. |
-| `21`| `PACKET_PING_REPLY` | C→S | Balasan denyut jantung (heartbeat pong) dari bot ke server. |
-| `22`| `PACKET_PING_REQUEST` | S→C | Permintaan denyut jantung (heartbeat ping) dari server ke bot. |
-| `23`| `PACKET_PING_REQUEST_ALT` | S→C | Variasi paket ping request server. |
+| `10`| `PACKET_ITEM_ACTIVATE_REQUEST`| C→S | Menggunakan item konsumsi atau alat dari inventaris. |
+| `11`| `PACKET_ITEM_ACTIVATE_OBJECT_REQ` | C→S | Mengambil item yang mengambang di dekat bot (`collect`). Koordinat `pos_x` & `pos_y` WAJIB koordinat item, bukan pemain! |
+| `12`| `PACKET_SEND_TILE_TREE_STATE` | S→C | Status pertumbuhan pohon (tree progress). |
+| `13`| `PACKET_MODIFY_ITEM_INVENTORY`| S→C | Modifikasi slot inventaris pemain. |
+| `14`| `PACKET_ITEM_CHANGE_OBJECT`   | S→C | Item yang melayang/jatuh di world muncul (`net_id == -1`) atau diambil (`net_id >= 0`). |
+| `15`| `PACKET_SEND_LOCK`            | S→C | Informasi status kunci (world/small/big lock). |
+| `18`| `PACKET_SET_ICON_STATE`       | S→C | Pembaruan efek visual status ikon. |
+| `20`| `PACKET_SET_CHARACTER_STATE`  | S→C | Pembaruan pakaian, sayap, atau visual efek karakter. |
+| `21`| `PACKET_PING_REPLY`           | C→S | Balasan denyut jantung (heartbeat pong) dari bot ke server. |
+| `22`| `PACKET_PING_REQUEST`         | S→C | Permintaan denyut jantung (heartbeat ping) dari server ke bot. |
+| `23`| `PACKET_PING_REQUEST_ALT`     | S→C | Variasi paket ping request server. |
 
 ---
 
@@ -261,41 +267,70 @@ end_dialog|profile|Continue||
 
 ## 9. Protokol Dropped Item & Auto Pickup / Collect
 
-### A. Broadcast Pemunculan & Pengambilan Item (Server ke Bot)
+### A. Broadcast Pemunculan & Pengambilan Item (Server ke Bot - Tank Packet 14)
 Server GTPS menyiarkan pembaruan item terapung di world melalui Tank Packet:
-- **Tipe Paket**: `PACKET_ITEM_CHANGE_OBJECT` (`8`) atau variasi event server (`14`).
-- **Ketika Item Jatuh / Muncul Baru**:
-  - `net_id`: UID objek yang dialokasikan server (atau `-1` pada beberapa GTPS non-resmi).
-  - `target_net_id` / `main_data`: Item ID atau UID sekunder.
-  - `count1`: Jumlah item yang jatuh.
-  - `pos_x`, `pos_y`: Koordinat piksel item mengambang di world.
-  - *Gotcha GTPS*: Jika server mengirim `net_id = -1`, bot membangkitkan UID fallback unik (`atomic<uint32_t>`) agar item tidak saling menimpa dalam `WorldState`.
-- **Ketika Item Terambil / Menghilang**:
-  - Disiarkan dengan kondisi `count1 == 0` atau item broadcast penghapusan.
-  - Bot menghapus item dari memori lokal berdasarkan UID dan mencocokkan radius koordinat piksel terdekat (`removeDroppedItemByPos`).
+- **Tipe Paket**: `PACKET_ITEM_CHANGE_OBJECT` (`14` / variasi `8`).
+- **Gotcha Kritis `count1 == 0` vs Koordinat Fisik**:
+  - Pada struktur GTPS berbasis C++, `packetType` sering ditulis sebagai integer 32-bit (`int32_t type = 14`). Akibatnya, byte ke-2 dari header (`count1`) **selalu bernilai 0** pada paket drop masuk.
+  - Mengevaluasi `if (count1 == 0)` sebagai tanda item terambil adalah **BUG FATAL** yang menyebabkan setiap item baru jatuh langsung dihapus seketika dari memori world bot.
+- **Pembeda Mutlak Siklus Hidup (Lifecycle) & Resolusi UID Dropped Item**:
+  - **Item Jatuh / Muncul di Lantai (`is_on_ground = true`)**:
+    - Terdeteksi saat: `pos_x > 0.0f || pos_y > 0.0f || count1 > 0`.
+    - `target_net_id`: **Player Avatar NetID (pelempar item)**, BUKAN Object UID! Menyetel `uid = target_net_id` adalah fatal karena menimpa Object UID dengan avatar NetID pemain di world (misal NetID=1 milik player lain).
+    - `main_data`: Item ID (jenis item, misal 5032 / Water Essence).
+    - `float_var` / `count1`: Jumlah item yang dijatuhkan (default 1 jika 0).
+    - **Resolusi Object UID**: Mengikuti standar mesin server Growtopia (Proton/CPS), setiap world menyimpan `last_dropped_uid`. Saat item baru jatuh, client mengalokasikan UID sekuensial `uid = ++world->last_dropped_uid` (kecuali jika `target_net_id > last_dropped_uid` dan bukan NetID pemain aktif, yang menandakan server emulator mengirim UID eksplisit).
+    - Bot memanggil `WorldState::addOrUpdateDroppedItem(uid, item_id, count, pos_x, pos_y)` dan segera memicu pemeriksaan serap proksimitas jika dekat dengan posisi bot (`<= 96 px`).
+  - **Item Terambil / Menghilang dari Lantai (`is_on_ground = false`)**:
+    - Terdeteksi saat: `pos_x == 0.0f && pos_y == 0.0f`.
+    - `main_data` (atau fallback `target_net_id`): Object UID (`oid`) item yang terambil dari lantai (misal 558).
+    - `net_id`: NetID avatar player yang menyerap item tersebut (misal NetID=33 milik bot).
+    - Bot memanggil `WorldState::removeDroppedItem(uid)` serta membersihkan cache cooldown percobaan di `BotActions` untuk membersihkan memori.
 
-### B. Paket Pengambilan Item Klien (Bot ke Server)
+### B. Paket Pengambilan Item Klien (Bot ke Server - Dual-Payload Dispatch)
 Klien resmi Growtopia dan Lucifer mengambil dropped item bukan dengan mengirim Tank Packet 8, melainkan:
 - **Tipe Paket**: `PACKET_ITEM_ACTIVATE_OBJECT_REQUEST` (Tank Packet Type `11` / `0x0B`).
-- **Struktur Field Kritis**:
-  - `pkt.type = PACKET_ITEM_ACTIVATE_OBJECT_REQUEST` (`11`)
-  - `pkt.net_id = local_net_id` (**Kritis**: Wajib berisi NetID lokal milik bot, bukan UID objek! Sebagian besar server GTPS memvalidasi `pkt.net_id == peer->net_id` dan akan menolak permintaan jika `net_id` tidak cocok).
-  - `pkt.target_net_id = object_uid` (UID objek yang ingin diambil).
-  - `pkt.main_data = object_uid` (UID objek sekunder).
-  - `pkt.pos_x = player_pos_x`, `pkt.pos_y = player_pos_y` (Koordinat piksel posisi berdiri bot saat mengambil item).
+- **Dual-Payload Dispatch Architecture (Anti-Miss)**:
+  Karena variasi emulator GTPS (GT-Server, GrowtopiaServer, GTCpp) mengimplementasikan pembacaan field paket 11 yang berbeda-beda, bot mengirimkan **dua varian payload terkoordinasi**:
+  1. **Format V1 (Standar Legacy GTPS)**:
+     - `pkt.type = PACKET_ITEM_ACTIVATE_OBJECT_REQUEST` (`11`).
+     - `pkt.net_id = object_uid` (Server membaca NetID sebagai Object UID).
+     - `pkt.pos_x = local_x`, `pkt.pos_y = local_y` (Koordinat bot).
+  2. **Format V2 (Modern / Strict Emulator)**:
+     - `pkt.type = PACKET_ITEM_ACTIVATE_OBJECT_REQUEST` (`11`).
+     - `pkt.net_id = local_net_id` (NetID bot sendiri).
+     - `pkt.main_data = object_uid` (Object UID di field `value/main_data`).
+     - `pkt.pos_x = item_x`, `pkt.pos_y = item_y` (Koordinat target item di lantai).
+- **Proteksi Sanitasi UID**:
+  Paket tidak dikirim jika `object_uid <= 0` untuk menghindari spam penolakan server terhadap UID `-1`.
 
-### C. Mekanisme Pass-Through Hitbox Collection (Seperti Player Asli)
+### C. Heuristik Parsing Dropped Items pada Map Data (Type 4)
+Pada saat bot memasuki world (`PACKET_SEND_MAP_DATA`), daftar item yang jatuh terletak di akhir paket setelah seluruh petak world:
+1. **Jalur A (Forward Parsing)**: Membaca setelah pembacaan tile selesai. Bila format tile standar, header `d_count` (uint32) dan `last_uid` (uint32) langsung terbaca.
+2. **Jalur B (Reverse Signature Scanner)**: Jika terdapat extra data tile kustom GTPS yang menggeser pointer pembacaan, scanner memindai mundur dari akhir buffer hingga batas petak.
+   - **Toleransi Trailing Bytes**: Diperluas hingga 4096 bytes untuk mengantisipasi data cuaca, world timer, atau string tambahan di akhir map data.
+   - **Dukungan Gems & Untyped Drops (`item_id == 0`)**: Pada GTPS, Gems atau objek khusus sering memiliki `item_id == 0`. Validator tidak membuang array dropped item hanya karena ada item ID 0.
+   - **UID Fallback Generator**: Jika server menyetel UID `0` pada dropped items di map data, bot mengalokasikan UID fallback unik lokal secara berurutan agar item tetap dapat diproses dan diserap.
+
+### C. Mekanisme Movement-Triggered & Autonomous Collection (Tanpa Tombol Manual)
 Server Growtopia/GTPS secara ketat memvalidasi jarak (*proximity check*) antara koordinat pemain dan koordinat item floating:
-- **Radius Ambil**: $\le 44.0\text{ piksel}$ (~1.37 tile). Memberikan toleransi natural terhadap offset vertikal animasi floating item di atas ubin/tanah.
-- **Deteksi Saat Melangkah (`moveTo`) & Map Load**:
-  - Saat bot berjalan melangkah (baik single-step maupun background pathfinding thread), fungsi `checkPassThroughCollect` secara otomatis memindai seluruh `dropped_items_` dalam radius $\le 44\text{ px}$.
-  - Saat bot pertama kali memasuki world (`PACKET_SEND_MAP_DATA`), bot langsung memeriksa apakah ada floating item di bawah kakinya dan menyerapnya seketika.
-  - Untuk setiap item floating yang terlewati, bot memvalidasi kapasitas inventaris (`canPickupItem`):
-    - **Gems (Item ID 112)**: Selalu diambil tanpa syarat, karena Gems tidak mengonsumsi slot tas.
+- **Trigger Terintegrasi Loop Pergerakan (`moveTo` & Pathfinding)**:
+  - Setiap kali bot berpindah tile (baik 1 langkah maupun multi-langkah `FindPath`/`moveTo`), fungsi `triggerMovementCollect` langsung dipanggil pada koordinat tile tujuan dan setiap koordinat intermediate.
+  - Bot memeriksa keberadaan floating item dalam radius jangkauan (default 1.5 tile, dapat diatur hingga 4.0 tile) dan langsung mengirimkan `PACKET_ITEM_ACTIVATE_OBJECT_REQUEST` (type 11).
+  - Pengambilan dilakukan secara non-blocking sehingga tidak pernah menghentikan atau memperlambat kelancaran langkah bot.
+- **Integrasi Keypad Global (WASD & Tombol Panah)**:
+  - GUI menyediakan listener input keyboard terpadu untuk tombol `W`, `A`, `S`, `D` dan `Up`, `Down`, `Left`, `Right` (hanya aktif saat tidak sedang mengetik di input text).
+  - Setiap input pergerakan keypad langsung menggerakkan bot dan seketika menyerap item yang berada di tile yang dilalui atau di sampingnya.
+- **Interval & Penanganan Anomali Server**:
+  - Delay interval antar request pickup diatur default ke **20 ms** ultra-cepat (dapat diatur runtime 10–500 ms).
+  - Per-UID tracking mencegah pengiriman ganda pada frame yang sama, namun mengizinkan retry otomatis jika server sempat mengalami lag dan item belum terhapus dari world.
+- **Background Proximity Daemon (Always-On Fallback)**:
+  - Thread mandiri pada `AutoCollectController` (tick sinkron 20ms) mendeteksi item jika bot sedang diam/idle di samping floating item atau jika item dijatuhkan oleh player lain di dekat bot.
+  - Untuk setiap item floating yang terdeteksi, bot memvalidasi kapasitas inventaris (`canPickupItem`):
+    - **Gems (Item ID 112) & Item ID 0**: Selalu diambil tanpa syarat, karena Gems tidak mengonsumsi slot tas.
     - **Item Biasa**: Diambil jika bot masih memiliki slot inventaris kosong ATAU item tersebut sudah ada di tas dengan jumlah $< 250$ (mendukung server CPS/GTPS bertumpuk 250). Jika tas penuh, item dilewati dan bot tetap melanjutkan pengambilan Gems atau item lain yang muat.
-  - Rate-limit internal: Per-UID cooldown 250ms untuk mencegah spam paket 11 yang dapat memicu rate-limit disconnect server.
-- **Instant Drop-at-Feet Pickup**:
-  - Saat bot menerima siaran `PACKET_ITEM_CHANGE_OBJECT` (Tank 14/8) dari server untuk item baru yang jatuh tepat di bawah kaki bot (radius $\le 44\text{ px}$), bot langsung merespons dengan paket 11 seketika.
+- **Eliminasi Ketergantungan Tombol Manual**:
+  - Tombol manual "Collect Nearby" digantikan oleh badge status otomatis `⚡ Auto-Collect on Move: AKTIF` pada UI D-Pad dan tab kontrol utama.
 
 ### D. Kompatibilitas Lua
 - `getObjects()` / `bot:getObjects()`: Mengembalikan daftar seluruh item floating di world lengkap dengan `oid`, `itemid`, `count`, `pos`, `tile_x`, `tile_y`.
@@ -303,5 +338,40 @@ Server Growtopia/GTPS secara ketat memvalidasi jarak (*proximity check*) antara 
 - `collectObject(oid, [range])` / `bot:collectObject(oid, [range])`: Mengambil dropped item via UID. Jika `range` diberikan dan jarak melebihi `range`, bot dapat melangkah ke item terlebih dahulu.
 - `collectByID(item_id, [range])` / `bot:collectByID(item_id, [range])`: Mencari item floating terdekat dengan Item ID tertentu dan mengambilnya.
 - `Collect(oid)` / `Collect(obj)` / `Collect([radius])` / `CollectNearby([radius])`: Kompatibel penuh dengan gaya penulisan Bothax.
+
+---
+
+## 23. Continuous High-Frequency Scanner & Dual-Payload Protocol Dispatch
+
+### A. Latar Belakang & Analisis Masalah Pengambilan Item di GTPS
+Pada pengujian langsung di berbagai core server GTPS (Proton, CPS, Lucifer, GrowServer), sering ditemukan anomali di mana dropped item tidak terambil meskipun log bot mencatat pengiriman paket:
+1. **Divergensi Format Paket Type 11 (`PACKET_ITEM_ACTIVATE_OBJECT_REQUEST`)**:
+   - **Format V1 (Classic Proton)**: Membaca `packet->m_netID` sebagai Object UID yang berada di lantai, dengan `pos_x, pos_y` sebagai posisi berdiri pemain.
+   - **Format V2 (Modern CPS / Lucifer Core)**: Membaca `packet->m_netID` sebagai NetID bot pemain lokal, `packet->m_main_data` sebagai Object UID, dan `pos_x, pos_y` sebagai posisi tepat floating item (`item.x, item.y`).
+   - *Dampak*: Jika bot hanya mengirim format V1 ke server bertipe CPS/Lucifer, server menolak paket karena mendeteksi NetID mismatch. Sebaliknya jika hanya format V2 ke Proton, packet handler Proton mengira itu entity yang salah.
+2. **Divergensi Opcode Broadcast Drop**:
+   - Mayoritas GTPS menggunakan Tank Type 14 (`PACKET_ITEM_CHANGE_OBJECT`).
+   - Namun beberapa server kustom mengirimkan event kemunculan item melalui Tank Type 8 (`PACKET_TILE_APPLY_DAMAGE` / object mutation) dengan `count1 > 0`.
+3. **Ketidaksinkronan Cache Memori vs Objek Nyata di Lantai**:
+   - Jika paket broadcast drop terlewat atau terjadi desinkronisasi saat bot join world, daftar memori lokal kosong sehingga bot ragu mengirimkan paket collect.
+
+### B. Solusi: Dual-Payload Protocol Dispatch
+Bot sekarang mengeksekusi pengiriman ganda berurutan secara transparan pada setiap kali fungsi `collect(...)` dipanggil:
+- **Payload 1 (Format V1 - Proton Compatible)**:
+  `net_id = object_uid`, `target_net_id = object_uid`, `pos = player_pos`
+- **Payload 2 (Format V2 - CPS / Lucifer Compatible)**:
+  `net_id = local_net_id`, `main_data = object_uid`, `target_net_id = object_uid`, `pos = item_pos`
+- *Hasil*: Server varian apa pun akan selalu menerima setidaknya satu format yang cocok secara sempurna tanpa menolak request.
+
+### C. Continuous Active Scanner Daemon (20ms – 50ms)
+- Thread `passiveProximityWorker()` berjalan tanpa henti di latar belakang memindai dropped item dalam radius jangkauan bot (default 2.5 tile / 80px).
+- Didukung **Wildcard Proximity Probe (`collect(-1, px, py)`)** yang otomatis terpicu secara berkala (throttled 200ms) saat bot melangkah, menyerap seluruh item di lantai meskipun cache UID memori belum terisi.
+
+### D. Live GUI Telemetry Monitor
+Panel visual realtime pada tab Automation menampilkan:
+- Jumlah total item mengambang di seluruh world.
+- Jumlah item dalam jangkauan avatar (<2.5 tile).
+- Tracking item terdekat (Item ID, UID, dan jarak dalam tile).
+- Status aktif detak scanner daemon (ms) dan counter total item yang berhasil diserap sesi ini.
 
 

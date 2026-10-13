@@ -151,7 +151,7 @@ public:
 
     // Auto-Collect Base Feature Buffers
     int collect_filter_id_ = 0;
-    int collect_delay_ms_ = 600;
+    int collect_delay_ms_ = 20;
     bool pref_passive_collect_ = true;
 
     // Movement (Tanda Panah) Buffers

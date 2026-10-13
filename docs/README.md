@@ -44,7 +44,7 @@ Dokumentasi ini dibagi menjadi beberapa bagian tematik agar mudah dipelajari dan
 
 ### Prasyarat
 - Visual Studio 2019 / 2022 / 2026 dengan toolset C++ (MSVC)
-- CMake 3.16 atau yang lebih baru
+- CMake 3.16 atau yang lebih baru (kompatibel penuh dengan CMake 3.30+ & CMake 4.x via policy `CMP0169` & `CMAKE_POLICY_VERSION_MINIMUM 3.10`)
 - Windows SDK 10.0 atau 11.0
 
 ### Perintah Kompilasi

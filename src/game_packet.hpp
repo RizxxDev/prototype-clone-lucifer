@@ -18,14 +18,16 @@ enum TankPacketType : uint8_t {
     PACKET_SEND_TILE_UPDATE_DATA           = 5,
     PACKET_SEND_TILE_UPDATE_DATA_MULTIPLE  = 6,
     PACKET_TILE_ACTIVATE_REQUEST           = 7,
-    PACKET_ITEM_CHANGE_OBJECT              = 8,
+    PACKET_TILE_APPLY_DAMAGE               = 8,
     PACKET_SEND_INVENTORY_STATE            = 9,
     PACKET_ITEM_ACTIVATE_REQUEST           = 10,
     PACKET_ITEM_ACTIVATE_OBJECT_REQUEST    = 11,
-    PACKET_SEND_PLAYER_TRIBUTE_DATA        = 12,
-    PACKET_SET_ICON_STATE                  = 13,
-    PACKET_ITEM_EFFECT                     = 14,
+    PACKET_SEND_TILE_TREE_STATE            = 12,
+    PACKET_MODIFY_ITEM_INVENTORY           = 13,
+    PACKET_ITEM_CHANGE_OBJECT              = 14,
+    PACKET_SEND_LOCK                       = 15,
     PACKET_SEND_ITEM_DATABASE_DATA         = 16,
+    PACKET_SET_ICON_STATE                  = 18,
     PACKET_SET_CHARACTER_STATE             = 20,
     PACKET_PING_REPLY                      = 21,
     PACKET_PING_REQUEST                    = 22,
@@ -150,15 +152,31 @@ namespace TankPacketHelper {
         return pkt;
     }
 
-    // Create Item Activate Object Request (Collect / pickup floating item or gem)
-    inline GameUpdatePacket createCollectObject(int object_uid, float player_x, float player_y, int local_net_id = -1) {
+    // Create Item Activate Object Request (Format V1: Classic Proton GTPS - net_id = object_uid, pos = player_pos)
+    inline GameUpdatePacket createCollectObject(int object_uid, float player_x, float player_y) {
+        GameUpdatePacket pkt{};
+        pkt.type = PACKET_ITEM_ACTIVATE_OBJECT_REQUEST; // Type 11
+        pkt.net_id = object_uid;
+        pkt.target_net_id = object_uid;
+        pkt.main_data = object_uid;
+        pkt.pos_x = player_x;
+        pkt.pos_y = player_y;
+        pkt.int_x = 0;
+        pkt.int_y = 0;
+        return pkt;
+    }
+
+    // Create Item Activate Object Request (Format V2: Modern CPS/Lucifer GTPS - net_id = local_net_id, main_data = object_uid, pos = item_pos)
+    inline GameUpdatePacket createCollectObjectV2(int object_uid, int local_net_id, float item_x, float item_y) {
         GameUpdatePacket pkt{};
         pkt.type = PACKET_ITEM_ACTIVATE_OBJECT_REQUEST; // Type 11
         pkt.net_id = (local_net_id >= 0) ? local_net_id : -1;
         pkt.target_net_id = object_uid;
         pkt.main_data = object_uid;
-        pkt.pos_x = player_x;
-        pkt.pos_y = player_y;
+        pkt.pos_x = item_x;
+        pkt.pos_y = item_y;
+        pkt.int_x = 0;
+        pkt.int_y = 0;
         return pkt;
     }
 }

@@ -402,10 +402,11 @@ void LuciferGui::renderMainLayout() {
 
         ImGui::Spacing();
 
-        // Passive Pass-Through Auto-Collect tick loop (berjalan jika passive enabled)
+        // Passive Proximity Auto-Collect tick loop (berjalan jika passive enabled)
         static auto s_last_auto_collect = std::chrono::steady_clock::now();
         auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - s_last_auto_collect).count() >= 350) {
+        int active_tick_ms = std::max(10, actions_.getPickupDelay());
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - s_last_auto_collect).count() >= active_tick_ms) {
             s_last_auto_collect = now;
             if (bot_manager_) {
                 for (auto& b : bot_manager_->getBots()) {
@@ -416,11 +417,43 @@ void LuciferGui::renderMainLayout() {
                         b->getAutoCollect().triggerPassThroughCollect(bx, by);
                     }
                 }
-            } else if (enet_.isConnected() && autocollect_.isPassiveEnabled()) {
+            }
+            if (enet_.isConnected() && autocollect_.isPassiveEnabled()) {
                 float bx = 0, by = 0;
                 int btx = 0, bty = 0;
                 world_.getLocalPos(bx, by, btx, bty);
                 autocollect_.triggerPassThroughCollect(bx, by);
+            }
+        }
+
+        // Global Keypad Movement (WASD & Tombol Panah - otomatis auto-collect floating items)
+        if (!io.WantTextInput) {
+            int move_dx = 0, move_dy = 0;
+            if (ImGui::IsKeyPressed(ImGuiKey_W) || ImGui::IsKeyPressed(ImGuiKey_UpArrow))    move_dy -= move_step_;
+            if (ImGui::IsKeyPressed(ImGuiKey_S) || ImGui::IsKeyPressed(ImGuiKey_DownArrow))  move_dy += move_step_;
+            if (ImGui::IsKeyPressed(ImGuiKey_A) || ImGui::IsKeyPressed(ImGuiKey_LeftArrow))  move_dx -= move_step_;
+            if (ImGui::IsKeyPressed(ImGuiKey_D) || ImGui::IsKeyPressed(ImGuiKey_RightArrow)) move_dx += move_step_;
+
+            if (move_dx != 0 || move_dy != 0) {
+                std::shared_ptr<BotInstance> active_b = nullptr;
+                if (bot_manager_) {
+                    if (selected_bot_id_ > 0) {
+                        active_b = bot_manager_->getBotById(selected_bot_id_);
+                    }
+                    if (!active_b) {
+                        auto bots = bot_manager_->getBots();
+                        if (!bots.empty()) active_b = bots.front();
+                    }
+                }
+                if (active_b && active_b->isOnline()) {
+                    float px = 0, py = 0; int tx = 0, ty = 0;
+                    active_b->getWorld().getLocalPos(px, py, tx, ty);
+                    active_b->moveTo(tx + move_dx, ty + move_dy);
+                } else if (enet_.isConnected()) {
+                    float px = 0, py = 0; int tx = 0, ty = 0;
+                    world_.getLocalPos(px, py, tx, ty);
+                    actions_.moveTo(tx + move_dx, ty + move_dy);
+                }
             }
         }
 
@@ -991,11 +1024,8 @@ void LuciferGui::renderCardMovement(float w, float h) {
     ImGui::Button("⚙️##step_gear", ImVec2(22, 20));
 
     ImGui::Spacing();
-    ImGui::SetCursorPosX(center_x - 65.0f);
-    if (ImGui::Button("🧲 Collect Nearby", ImVec2(130, 22))) {
-        if (bot) bot->getActions().collectNearby(4.0f);
-        else actions_.collectNearby(4.0f);
-    }
+    ImGui::SetCursorPosX(center_x - 75.0f);
+    ImGui::TextColored(ImVec4(0.20f, 0.90f, 0.45f, 1.0f), "⚡ Auto-Collect on Move");
 
     ImGui::EndChild();
 }
@@ -2469,25 +2499,40 @@ void LuciferGui::renderSubTabAutomation() {
     ImGui::Text("Status Sweeper: %s", cur_collect.isRunning() ? "ACTIVE (MENYAPU WORLD DENGAN PATHFINDING)" : "IDLE");
     
     bool passive_en = cur_collect.isPassiveEnabled();
-    if (ImGui::Checkbox("Otomatis Ambil Saat Melangkah / Pass-Through (Always-On)", &passive_en)) {
+    if (ImGui::Checkbox("Otomatis Ambil Saat Mendekat & Melangkah (Always-On)", &passive_en)) {
         cur_collect.setPassiveEnabled(passive_en);
     }
-    ImGui::TextDisabled("Ketika aktif, bot otomatis mengambil item saat melintas di atasnya (seperti player asli).");
+    ImGui::TextDisabled("Ketika aktif, bot otomatis menyerap floating item saat berada dekat atau melintas di atasnya.");
+
+    float cur_rad = cur_collect.getProximityRadius();
+    ImGui::SetNextItemWidth(180);
+    if (ImGui::SliderFloat("Proximity Radius (Tile)##prox_rad", &cur_rad, 1.0f, 4.0f, "%.1f Tile")) {
+        cur_collect.setProximityRadius(cur_rad);
+        if (bot) bot->getActions().setMovementCollectRadius(cur_rad);
+        else actions_.setMovementCollectRadius(cur_rad);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(Rekomendasi: 1.5 Tile)");
 
     ImGui::SetNextItemWidth(140);
     ImGui::InputInt("Filter Item ID##collect_id", &collect_filter_id_);
     ImGui::SameLine();
     ImGui::TextDisabled("(0 = Semua Item, 112 = Gems)");
 
+    int cur_delay = (bot) ? bot->getActions().getPickupDelay() : actions_.getPickupDelay();
     ImGui::SetNextItemWidth(180);
-    if (ImGui::SliderInt("Pickup Delay (ms)##collect_delay", &collect_delay_ms_, 300, 1500)) {
-        cur_collect.setDelayMs(collect_delay_ms_);
+    if (ImGui::SliderInt("Pickup Interval (ms)##collect_delay", &cur_delay, 10, 500)) {
+        if (bot) bot->getActions().setPickupDelay(cur_delay);
+        else actions_.setPickupDelay(cur_delay);
+        cur_collect.setDelayMs(cur_delay);
     }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(Pilihan: 20 ms)");
 
     ImGui::Spacing();
     if (!cur_collect.isRunning()) {
         if (ImGui::Button("▶️ Mulai Sweeper (Pathfind & Collect)", ImVec2(240, 28))) {
-            cur_collect.start(static_cast<uint16_t>(collect_filter_id_ > 0 ? collect_filter_id_ : 0), collect_delay_ms_);
+            cur_collect.start(static_cast<uint16_t>(collect_filter_id_ > 0 ? collect_filter_id_ : 0), cur_delay);
         }
     } else {
         if (ImGui::Button("🛑 Hentikan Sweeper", ImVec2(240, 28))) {
@@ -2498,13 +2543,83 @@ void LuciferGui::renderSubTabAutomation() {
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
-    ImGui::Text("Quick Automation:");
-    if (ImGui::Button("🧲 Auto Collect Sekitar", ImVec2(200, 24))) {
-        actions_.collectNearby(collect_radius_);
+
+    // 📡 Live Item Scanner Monitor
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.04f, 0.08f, 0.14f, 0.95f));
+    ImGui::BeginChild("LiveScannerMonitor", ImVec2(0, 150), true, ImGuiWindowFlags_NoScrollbar);
+    
+    WorldState& cur_world = bot ? bot->getWorld() : world_;
+    auto dropped_items = cur_world.getDroppedItems();
+    float cur_px = 0.0f, cur_py = 0.0f;
+    int cur_tx = 0, cur_ty = 0;
+    cur_world.getLocalPos(cur_px, cur_py, cur_tx, cur_ty);
+    
+    float prox_tiles = cur_collect.getProximityRadius();
+    float max_dist_sq = (prox_tiles * 32.0f) * (prox_tiles * 32.0f);
+    
+    int nearby_count = 0;
+    const DroppedItem* closest_item = nullptr;
+    float closest_dist_sq = 1e9f;
+    
+    for (const auto& itm : dropped_items) {
+        float dx = itm.x - cur_px;
+        float dy = itm.y - cur_py;
+        float dsq = dx * dx + dy * dy;
+        if (dsq <= max_dist_sq) {
+            nearby_count++;
+        }
+        if (dsq < closest_dist_sq) {
+            closest_dist_sq = dsq;
+            closest_item = &itm;
+        }
     }
-    ImGui::SameLine();
+    
+    ImGui::TextColored(ImVec4(0.3f, 0.9f, 1.0f, 1.0f), "📡 Live Item Scanner Monitor");
+    ImGui::Separator();
+    
+    ImGui::Columns(2, "ScannerColumns", false);
+    ImGui::SetColumnWidth(0, 240.0f);
+    
+    ImGui::Text("Total Floating di World:");
+    ImGui::Text("Item Dekat Avatar (<%.1fT):", prox_tiles);
+    ImGui::Text("Item Terdekat:");
+    ImGui::Text("Status Scanner Daemon:");
+    ImGui::Text("Total Terambil Sesi Ini:");
+    
+    ImGui::NextColumn();
+    
+    ImGui::TextColored(dropped_items.empty() ? ImVec4(0.6f, 0.6f, 0.6f, 1.0f) : ImVec4(0.2f, 1.0f, 0.5f, 1.0f), 
+                       "%zu item", dropped_items.size());
+    ImGui::TextColored(nearby_count > 0 ? ImVec4(0.2f, 1.0f, 0.4f, 1.0f) : ImVec4(0.7f, 0.7f, 0.7f, 1.0f), 
+                       "%d item", nearby_count);
+    
+    if (closest_item) {
+        float dist_tiles = std::sqrt(closest_dist_sq) / 32.0f;
+        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "ID %u (UID %u) | %.1f Tile", 
+                           closest_item->id, closest_item->uid, dist_tiles);
+    } else {
+        ImGui::TextDisabled("Tidak ada");
+    }
+    
+    bool scanner_active = cur_collect.isPassiveProximityRunning();
+    ImGui::TextColored(scanner_active ? ImVec4(0.2f, 1.0f, 0.4f, 1.0f) : ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
+                       "%s (Detak %d ms)", scanner_active ? "AKTIF" : "NONAKTIF", cur_delay);
+    
+    uint32_t last_uid = cur_collect.getLastCollectedUid();
+    ImGui::TextColored(ImVec4(0.4f, 0.9f, 1.0f, 1.0f), "%d item (Terakhir: UID %u)", 
+                       cur_collect.getTotalCollectedCount(), last_uid);
+    
+    ImGui::Columns(1);
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::Text("Quick Automation:");
     if (ImGui::Button("🚪 Auto Enter Pintu / Portal", ImVec2(220, 24))) {
-        actions_.enter();
+        if (bot) bot->getActions().enter();
+        else actions_.enter();
     }
 
     ImGui::EndChild();
@@ -3222,9 +3337,21 @@ void LuciferGui::renderTabMultiBot() {
 }
 
 void LuciferGui::renderTabMovement() {
+    std::shared_ptr<BotInstance> cur_b = nullptr;
+    if (bot_manager_) {
+        if (selected_bot_id_ > 0) cur_b = bot_manager_->getBotById(selected_bot_id_);
+        if (!cur_b) {
+            auto bots = bot_manager_->getBots();
+            if (!bots.empty()) cur_b = bots.front();
+        }
+    }
+    bool is_inst = (cur_b && cur_b->isOnline());
+    BotActions& act = is_inst ? cur_b->getActions() : actions_;
+    WorldState& wst = is_inst ? cur_b->getWorld() : world_;
+
     float px = 0, py = 0;
     int tx = 0, ty = 0;
-    world_.getLocalPos(px, py, tx, ty);
+    wst.getLocalPos(px, py, tx, ty);
 
     ImGui::BeginChild("MovementControls", ImVec2(0, 360), true);
     ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.40f, 1.0f), "🚶 KONTROL PERGERAKAN (TANDA PANAH)");
@@ -3232,7 +3359,9 @@ void LuciferGui::renderTabMovement() {
     ImGui::Spacing();
 
     ImGui::Text("Posisi Bot Saat Ini: Tile (%d, %d) | Pixel (%.1f, %.1f)", tx, ty, px, py);
-    ImGui::TextDisabled("Gunakan tombol panah di bawah atau tombol panah pada keyboard (Up, Down, Left, Right).");
+    ImGui::TextDisabled("Gunakan WASD atau tombol panah keyboard / D-Pad untuk melangkah.");
+    ImGui::TextColored(ImVec4(0.20f, 0.90f, 0.45f, 1.0f), "⚡ Auto-Collect on Move: AKTIF (Radius: %.1f Tile | Interval: %d ms)",
+                       act.getMovementCollectRadius(), act.getPickupDelay());
     ImGui::Spacing();
 
     // Step size
@@ -3250,22 +3379,6 @@ void LuciferGui::renderTabMovement() {
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Keyboard Arrow Keys navigation
-    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
-        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
-            actions_.moveTo(tx, ty - move_step_, 120);
-        }
-        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
-            actions_.moveTo(tx, ty + move_step_, 120);
-        }
-        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
-            actions_.moveTo(tx - move_step_, ty, 120);
-        }
-        if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
-            actions_.moveTo(tx + move_step_, ty, 120);
-        }
-    }
-
     // D-Pad Arrow Buttons Layout
     float btn_w = 110.0f;
     float btn_h = 45.0f;
@@ -3274,7 +3387,7 @@ void LuciferGui::renderTabMovement() {
     // Up Arrow Button
     ImGui::SetCursorPosX(center_x);
     if (ImGui::Button(" ▲ ATAS ", ImVec2(btn_w, btn_h))) {
-        actions_.moveTo(tx, ty - move_step_, 120);
+        act.moveTo(tx, ty - move_step_, 120);
     }
 
     ImGui::Spacing();
@@ -3282,13 +3395,13 @@ void LuciferGui::renderTabMovement() {
     // Left, Center, Right Arrow Buttons
     ImGui::SetCursorPosX(center_x - btn_w - 10.0f);
     if (ImGui::Button(" ◄ KIRI ", ImVec2(btn_w, btn_h))) {
-        actions_.moveTo(tx - move_step_, ty, 120);
+        act.moveTo(tx - move_step_, ty, 120);
     }
     ImGui::SameLine();
     ImGui::Dummy(ImVec2(btn_w, btn_h)); // Spacer tengah
     ImGui::SameLine();
     if (ImGui::Button(" KANAN ► ", ImVec2(btn_w, btn_h))) {
-        actions_.moveTo(tx + move_step_, ty, 120);
+        act.moveTo(tx + move_step_, ty, 120);
     }
 
     ImGui::Spacing();
@@ -3296,7 +3409,7 @@ void LuciferGui::renderTabMovement() {
     // Down Arrow Button
     ImGui::SetCursorPosX(center_x);
     if (ImGui::Button(" ▼ BAWAH ", ImVec2(btn_w, btn_h))) {
-        actions_.moveTo(tx, ty + move_step_, 120);
+        act.moveTo(tx, ty + move_step_, 120);
     }
 
     ImGui::EndChild();

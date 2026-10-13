@@ -431,7 +431,8 @@ void Cli::cmdStatus() {
               << "  World     : " << world_.getWorldName() << "\n"
               << "  Auto-Farm : " << (autofarm_.isRunning() ? "AKTIF" : "NONAKTIF") << "\n"
               << "  Sweeper   : " << (autocollect_.isRunning() ? "AKTIF" : "NONAKTIF") << "\n"
-              << "  Passive   : " << (autocollect_.isPassiveEnabled() ? "AKTIF (Pass-Through Always-On)" : "NONAKTIF") << "\n"
+              << "  On-Move AC: " << (actions_.isAutoCollectOnMove() ? ("AKTIF (Radius: " + std::to_string(actions_.getMovementCollectRadius()).substr(0, 3) + " Tile, Delay: " + std::to_string(actions_.getPickupDelay()) + "ms)") : "NONAKTIF") << "\n"
+              << "  Passive   : " << (autocollect_.isPassiveEnabled() ? ("AKTIF (Radius: " + std::to_string(autocollect_.getProximityRadius()).substr(0, 3) + " Tile)") : "NONAKTIF") << "\n"
               << "  Status    : " << (enet_.isConnected() ? "TERHUBUNG (Online)" : "TERPUTUS (Offline)") << "\n"
               << "----------------------------------------------\n\n";
 }

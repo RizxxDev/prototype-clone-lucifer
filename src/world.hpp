@@ -67,6 +67,9 @@ public:
     void addOrUpdateDroppedItem(uint32_t uid, uint16_t id, uint8_t count, float x, float y);
     void removeDroppedItem(uint32_t uid);
     void removeDroppedItemByPos(float x, float y, float tolerance = 32.0f);
+    uint32_t allocateNextDroppedUid();
+    uint32_t getLastDroppedUid() const;
+    void setLastDroppedUid(uint32_t uid);
 
     // Local Player
     void setLocalPos(float x, float y);
@@ -120,6 +123,7 @@ private:
     std::vector<Tile> tiles_;
     std::unordered_map<int, Player> players_;
     std::vector<DroppedItem> dropped_items_;
+    uint32_t last_dropped_uid_ = 0;
     std::unordered_map<int, ClientNPC> npcs_;
     std::vector<InventoryItem> inventory_;
     uint32_t inventory_slots_ = 16;

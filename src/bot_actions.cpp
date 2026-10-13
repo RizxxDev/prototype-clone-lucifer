@@ -34,7 +34,10 @@ void BotActions::moveTo(int tile_x, int tile_y, int step_delay_ms) {
     int dy = tile_y - cur_ty;
     int steps = std::max(std::abs(dx), std::abs(dy));
 
-    if (steps == 0) return;
+    if (steps == 0) {
+        triggerMovementCollect(target_x, target_y);
+        return;
+    }
 
     int net_id = world_.getLocalNetId();
     if (net_id < 0) net_id = -1;
@@ -47,7 +50,7 @@ void BotActions::moveTo(int tile_x, int tile_y, int step_delay_ms) {
         auto pkt = TankPacketHelper::createState(net_id, target_x, target_y, flags);
         sendTankPacket(pkt);
         world_.setLocalPos(target_x, target_y);
-        checkPassThroughCollect(target_x, target_y);
+        triggerMovementCollect(target_x, target_y);
         Logger::log("[ACTION] 🚶 Bergerak ke tile (", tile_x, ", ", tile_y, ") [Pixel: ", target_x, ", ", target_y, "]");
     } else {
         bool flying = mod_fly_.load();
@@ -65,7 +68,7 @@ void BotActions::moveTo(int tile_x, int tile_y, int step_delay_ms) {
                 auto pkt = TankPacketHelper::createState(net_id, step_x, step_y, flags);
                 sendTankPacket(pkt);
                 world_.setLocalPos(step_x, step_y);
-                checkPassThroughCollect(step_x, step_y);
+                triggerMovementCollect(step_x, step_y);
 
                 if (delay > 0 && i < steps) {
                     AntiDetection::sleepWithJitter(delay, std::max(2, delay / 4));
@@ -131,34 +134,78 @@ void BotActions::enter() {
     Logger::log("[ACTION] 🚪 Mengaktifkan pintu/portal di tile (", cur_tx, ", ", cur_ty, ")");
 }
 
-void BotActions::collect(int object_uid) {
+void BotActions::collect(int object_uid, float px, float py, float item_x, float item_y) {
     if (!enet_.isConnected()) return;
+    if (object_uid <= 0) return; // Abaikan UID tidak valid / negatif
 
-    float px = 0.0f, py = 0.0f;
-    int cur_tx = 0, cur_ty = 0;
-    world_.getLocalPos(px, py, cur_tx, cur_ty);
+    if (px == 0.0f && py == 0.0f) {
+        int cur_tx = 0, cur_ty = 0;
+        world_.getLocalPos(px, py, cur_tx, cur_ty);
+    }
 
-    int net_id = world_.getLocalNetId();
-    auto pkt = TankPacketHelper::createCollectObject(object_uid, px, py, net_id);
-    sendTankPacket(pkt);
-    Logger::log("[ACTION] 🧲 Mengirim paket collect UID=", object_uid, " Pos=(", px, ", ", py, ")");
+    // Resolusi koordinat item jika belum disuplai dan UID valid (> 0)
+    if (item_x == 0.0f && item_y == 0.0f) {
+        auto dropped = world_.getDroppedItems();
+        for (const auto& it : dropped) {
+            if (static_cast<int>(it.uid) == object_uid) {
+                item_x = it.x;
+                item_y = it.y;
+                break;
+            }
+        }
+        if (item_x == 0.0f && item_y == 0.0f) {
+            item_x = px;
+            item_y = py;
+        }
+    }
+
+    // Format V1 (Classic Proton GTPS): net_id = object_uid, pos = player_pos
+    auto pkt_v1 = TankPacketHelper::createCollectObject(object_uid, px, py);
+    sendTankPacket(pkt_v1);
+
+    // Format V2 (Modern CPS / Lucifer GTPS): net_id = local_net_id, main_data = object_uid, pos = item_pos
+    int local_net = world_.getLocalNetId();
+    auto pkt_v2 = TankPacketHelper::createCollectObjectV2(object_uid, local_net, item_x, item_y);
+    sendTankPacket(pkt_v2);
+
+    last_collected_uid_.store(static_cast<uint32_t>(object_uid));
+    total_collected_count_.fetch_add(1);
+
+    Logger::log("[ACTION] 🧲 Mengirim paket collect UID=", object_uid, " Pos=(", px, ", ", py, ") ItemPos=(", item_x, ", ", item_y, ") [Dual-Payload]");
 }
 
-bool BotActions::checkPassThroughCollect(float current_x, float current_y) {
+void BotActions::triggerMovementCollect(float target_x, float target_y) {
+    if (!auto_collect_on_move_.load()) return;
+    checkPassThroughCollect(target_x, target_y, movement_collect_radius_.load());
+}
+
+bool BotActions::checkPassThroughCollect(float current_x, float current_y, float radius_tiles) {
     if (!enet_.isConnected()) return false;
 
+    if (current_x == 0.0f && current_y == 0.0f) {
+        int tx = 0, ty = 0;
+        world_.getLocalPos(current_x, current_y, tx, ty);
+    }
+
     auto dropped = world_.getDroppedItems();
-    if (dropped.empty()) return false;
+    if (dropped.empty()) {
+        return false;
+    }
+
+    float r_tiles = (radius_tiles > 0.0f) ? radius_tiles : movement_collect_radius_.load();
+    float max_dist = r_tiles * 32.0f;
+    float max_dist_sq = max_dist * max_dist;
 
     auto now = std::chrono::steady_clock::now();
-    float max_dist_sq = 44.0f * 44.0f; // Jarak sentuh / pickup hitbox ~1.37 tile (1936 px sq)
     bool collected_any = false;
+    int interval_ms = pickup_delay_ms_.load();
 
     std::lock_guard<std::mutex> lock(collect_mtx_);
 
-    // Bersihkan cooldown yang sudah lebih dari 3 detik
+    // Bersihkan cooldown yang sudah lebih dari 4 detik
     for (auto it = collect_cooldowns_.begin(); it != collect_cooldowns_.end();) {
-        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second).count() > 3000) {
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second).count() > 4000) {
+            collect_attempts_.erase(it->first);
             it = collect_cooldowns_.erase(it);
         } else {
             ++it;
@@ -171,26 +218,31 @@ bool BotActions::checkPassThroughCollect(float current_x, float current_y) {
         float dist_sq = dx * dx + dy * dy;
 
         if (dist_sq <= max_dist_sq) {
-            // Cek cooldown per UID agar tidak spam dalam 250ms
+            // Cek cooldown per UID agar tidak spam server (menghargai pickup_delay_ms_ min 250ms)
             auto it = collect_cooldowns_.find(item.uid);
+            int attempts = collect_attempts_[item.uid];
             if (it != collect_cooldowns_.end()) {
                 auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second).count();
-                if (elapsed < 250) continue;
-            }
-
-            // Cek apakah item bisa diambil ke inventaris (atau Gems 112)
-            if (!world_.canPickupItem(item.id)) {
-                continue; // Tas penuh dan bukan gems, lewati
+                // Jika sudah gagal berkali-kali (>= 5x), backoff 2.5s agar tidak spam paket ke server
+                int min_retry_delay = (attempts >= 5) ? 2500 : std::max(250, interval_ms);
+                if (elapsed < min_retry_delay) continue;
             }
 
             collect_cooldowns_[item.uid] = now;
-            collect(static_cast<int>(item.uid));
-            Logger::log("[ACTION] 🧲 [Pass-Through] Otomatis menyerap floating item ID=", item.id, " UID=", item.uid, " (", (int)item.count, "x) di Pos=(", item.x, ", ", item.y, ")");
+            collect_attempts_[item.uid] = attempts + 1;
+            collect(static_cast<int>(item.uid), current_x, current_y, item.x, item.y);
+            Logger::log("[ACTION] 🧲 [Auto-Movement] Menyerap floating item ID=", item.id, " UID=", item.uid, " (", (int)item.count, "x) di Pos=(", item.x, ", ", item.y, ")");
             collected_any = true;
         }
     }
 
     return collected_any;
+}
+
+void BotActions::clearCollectCooldown(uint32_t uid) {
+    std::lock_guard<std::mutex> lock(collect_mtx_);
+    collect_cooldowns_.erase(uid);
+    collect_attempts_.erase(uid);
 }
 
 bool BotActions::collectObject(uint32_t uid, float range_tiles) {
@@ -212,17 +264,13 @@ bool BotActions::collectObject(uint32_t uid, float range_tiles) {
                 }
             }
 
-            if (!world_.canPickupItem(item.id)) {
-                return false;
-            }
-
-            collect(static_cast<int>(uid));
+            collect(static_cast<int>(uid), px, py, item.x, item.y);
             return true;
         }
     }
 
     // Direct collect UID
-    collect(static_cast<int>(uid));
+    collect(static_cast<int>(uid), px, py);
     return true;
 }
 
@@ -242,10 +290,8 @@ int BotActions::collectByID(uint16_t item_id, float range_tiles) {
             float dx = item.x - px;
             float dy = item.y - py;
             if (range_tiles <= 0.0f || (dx * dx + dy * dy <= max_sq)) {
-                if (world_.canPickupItem(item.id)) {
-                    collect(static_cast<int>(item.uid));
-                    count++;
-                }
+                collect(static_cast<int>(item.uid), px, py, item.x, item.y);
+                count++;
             }
         }
     }
@@ -268,13 +314,9 @@ int BotActions::collectNearby(float radius_tiles) {
         float dy = item.y - py;
         float dist_sq = dx * dx + dy * dy;
         if (dist_sq <= max_dist_sq) {
-            collect(static_cast<int>(item.uid));
+            collect(static_cast<int>(item.uid), px, py, item.x, item.y);
             collected++;
         }
-    }
-
-    if (collected == 0) {
-        Logger::log("[ACTION] 🧲 Tidak ada floating item dalam jangkauan (radius=", radius_tiles, " tile, pos=", px, ", ", py, ")");
     }
 
     return collected;
@@ -490,10 +532,57 @@ void AutoFarmController::farmLoop(uint16_t item_id, int tile_x, int tile_y, int 
 // ============================================================
 
 AutoCollectController::AutoCollectController(BotActions& actions, WorldState& world)
-    : actions_(actions), world_(world) {}
+    : actions_(actions), world_(world) {
+    startPassiveProximity();
+}
 
 AutoCollectController::~AutoCollectController() {
+    stopPassiveProximity();
     stop();
+}
+
+void AutoCollectController::setPassiveEnabled(bool en) {
+    passive_enabled_.store(en);
+    if (en) {
+        startPassiveProximity();
+    } else {
+        stopPassiveProximity();
+    }
+}
+
+void AutoCollectController::startPassiveProximity() {
+    if (passive_loop_running_.exchange(true)) return;
+    if (passive_thread_.joinable()) passive_thread_.join();
+    passive_thread_ = std::thread(&AutoCollectController::passiveProximityWorker, this);
+}
+
+void AutoCollectController::stopPassiveProximity() {
+    if (passive_loop_running_.exchange(false)) {
+        if (passive_thread_.joinable()) {
+            passive_thread_.join();
+        }
+    }
+}
+
+void AutoCollectController::passiveProximityWorker() {
+    while (passive_loop_running_) {
+        if (passive_enabled_.load()) {
+            float px = 0.0f, py = 0.0f;
+            int tx = 0, ty = 0;
+            world_.getLocalPos(px, py, tx, ty);
+            if (px > 0.0f || py > 0.0f) {
+                auto dropped = world_.getDroppedItems();
+                last_scan_count_.store(static_cast<int>(dropped.size()));
+                bool collected = actions_.checkPassThroughCollect(px, py, proximity_radius_.load());
+                if (collected) {
+                    last_collected_uid_.store(actions_.getLastCollectedUid());
+                    total_collected_count_.fetch_add(1);
+                }
+            }
+        }
+        int tick_delay = std::max(120, actions_.getPickupDelay());
+        std::this_thread::sleep_for(std::chrono::milliseconds(tick_delay));
+    }
 }
 
 bool AutoCollectController::start(uint16_t filter_item_id, int delay_ms, float max_range_tiles) {
@@ -526,7 +615,12 @@ bool AutoCollectController::isRunning() const {
 
 bool AutoCollectController::triggerPassThroughCollect(float current_x, float current_y) {
     if (!passive_enabled_.load()) return false;
-    return actions_.checkPassThroughCollect(current_x, current_y);
+    bool res = actions_.checkPassThroughCollect(current_x, current_y, proximity_radius_.load());
+    if (res) {
+        last_collected_uid_.store(actions_.getLastCollectedUid());
+        total_collected_count_.fetch_add(1);
+    }
+    return res;
 }
 
 void AutoCollectController::collectLoop(uint16_t filter_item_id, int delay_ms, float max_range_tiles) {
@@ -639,7 +733,8 @@ void AutoCollectController::collectLoop(uint16_t filter_item_id, int delay_ms, f
         float dx = best_item->x - cur_px;
         float dy = best_item->y - cur_py;
         if (dx * dx + dy * dy <= (48.0f * 48.0f)) {
-            actions_.collect(static_cast<int>(best_item->uid));
+            actions_.collect(static_cast<int>(best_item->uid), cur_px, cur_py, best_item->x, best_item->y);
+            recordCollected(best_item->uid);
 
             {
                 std::lock_guard<std::mutex> lock(retry_mtx_);

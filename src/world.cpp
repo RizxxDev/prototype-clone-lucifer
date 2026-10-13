@@ -39,6 +39,7 @@ void WorldState::clearWorld() {
     players_.clear();
     dropped_items_.clear();
     npcs_.clear();
+    last_dropped_uid_ = 0;
 }
 
 void WorldState::parseSpawn(const std::string& spawn_str, const std::string& my_name) {
@@ -340,11 +341,11 @@ void WorldState::parseMapData(const uint8_t* extra_data, size_t size) {
             if (reader.ok() && reader.remaining() >= 8) {
                 uint32_t d_count = reader.u32();
                 uint32_t last_uid = reader.u32();
-                (void)last_uid;
                 if (d_count > 0 && d_count <= 4000 && reader.remaining() >= d_count * 16) {
                     bool all_valid = true;
                     std::vector<DroppedItem> temp_items;
                     temp_items.reserve(d_count);
+                    uint32_t max_item_uid = last_uid;
                     for (uint32_t d = 0; d < d_count; ++d) {
                         uint16_t item_id = reader.u16();
                         float ox = reader.f32();
@@ -354,17 +355,26 @@ void WorldState::parseMapData(const uint8_t* extra_data, size_t size) {
                         (void)flags;
                         uint32_t uid = reader.u32();
 
-                        if (item_id == 0 || item_id > 25000 ||
+                        // Item ID 0 diperbolehkan (khas GTPS untuk Gems/untyped drops)
+                        if (item_id > 25000 ||
                             std::isnan(ox) || std::isinf(ox) || ox < 0.0f || ox > 6400.0f ||
                             std::isnan(oy) || std::isinf(oy) || oy < 0.0f || oy > 6400.0f ||
-                            count == 0 || uid == 0) {
+                            count == 0) {
                             all_valid = false;
                             break;
+                        }
+                        if (uid == 0) {
+                            static std::atomic<uint32_t> s_gen_uid{50000};
+                            uid = ++s_gen_uid;
+                        }
+                        if (uid > max_item_uid) {
+                            max_item_uid = uid;
                         }
                         temp_items.push_back({uid, item_id, count, ox, oy});
                     }
                     if (all_valid && !temp_items.empty()) {
                         dropped_items_ = std::move(temp_items);
+                        last_dropped_uid_ = max_item_uid;
                         parsed_dropped = true;
                     }
                 }
@@ -379,22 +389,35 @@ void WorldState::parseMapData(const uint8_t* extra_data, size_t size) {
 
                 for (size_t offset = max_scan; offset >= min_scan; --offset) {
                     uint32_t cand_count = *reinterpret_cast<const uint32_t*>(extra_data + offset);
-                    uint32_t cand_last_uid = *reinterpret_cast<const uint32_t*>(extra_data + offset + 4);
+                    size_t header_len = 8;
+                    uint32_t last_uid_header = 0;
+
+                    // Dukungan jika header count berupa u16 + u16/u32
+                    if (cand_count > 4000) {
+                        uint16_t cand_16 = *reinterpret_cast<const uint16_t*>(extra_data + offset);
+                        if (cand_16 > 0 && cand_16 <= 4000) {
+                            cand_count = cand_16;
+                            header_len = 6;
+                            last_uid_header = *reinterpret_cast<const uint32_t*>(extra_data + offset + 2);
+                        }
+                    } else {
+                        last_uid_header = *reinterpret_cast<const uint32_t*>(extra_data + offset + 4);
+                    }
 
                     if (cand_count == 0 || cand_count > 4000) continue;
-                    if (cand_last_uid == 0) continue;
 
                     size_t block_bytes = static_cast<size_t>(cand_count) * 16;
-                    if (offset + 8 + block_bytes > size) continue;
+                    if (offset + header_len + block_bytes > size) continue;
 
-                    size_t trailing_bytes = size - (offset + 8 + block_bytes);
-                    if (trailing_bytes > 512) continue;
+                    size_t trailing_bytes = size - (offset + header_len + block_bytes);
+                    if (trailing_bytes > 4096) continue;
 
                     bool valid = true;
                     std::vector<DroppedItem> temp_items;
                     temp_items.reserve(cand_count);
+                    uint32_t max_item_uid = last_uid_header;
 
-                    const uint8_t* p = extra_data + offset + 8;
+                    const uint8_t* p = extra_data + offset + header_len;
                     for (uint32_t i = 0; i < cand_count; ++i) {
                         uint16_t item_id = *reinterpret_cast<const uint16_t*>(p);
                         float ox = *reinterpret_cast<const float*>(p + 2);
@@ -404,12 +427,21 @@ void WorldState::parseMapData(const uint8_t* extra_data, size_t size) {
                         (void)flags;
                         uint32_t uid = *reinterpret_cast<const uint32_t*>(p + 12);
 
-                        if (item_id == 0 || item_id > 25000 ||
+                        if (item_id > 25000 ||
                             std::isnan(ox) || std::isinf(ox) || ox < 0.0f || ox > 6400.0f ||
                             std::isnan(oy) || std::isinf(oy) || oy < 0.0f || oy > 6400.0f ||
-                            count == 0 || uid == 0) {
+                            count == 0) {
                             valid = false;
                             break;
+                        }
+
+                        if (uid == 0) {
+                            static std::atomic<uint32_t> s_gen_uid_b{60000};
+                            uid = ++s_gen_uid_b;
+                        }
+
+                        if (uid > max_item_uid) {
+                            max_item_uid = uid;
                         }
 
                         temp_items.push_back({uid, item_id, count, ox, oy});
@@ -418,20 +450,21 @@ void WorldState::parseMapData(const uint8_t* extra_data, size_t size) {
 
                     if (valid && !temp_items.empty()) {
                         dropped_items_ = std::move(temp_items);
+                        last_dropped_uid_ = max_item_uid;
                         parsed_dropped = true;
-                        Logger::log("[WORLD] 🔍 Signature Scanner menemukan ", dropped_items_.size(), " floating items pada offset ", offset, " (trailing=", trailing_bytes, " bytes)");
+                        Logger::log("[WORLD] 🔍 Signature Scanner menemukan ", dropped_items_.size(), " floating items pada offset ", offset, " (trailing=", trailing_bytes, " bytes, last_uid=", last_dropped_uid_, ")");
                         break;
                     }
                 }
             }
 
             if (!dropped_items_.empty()) {
-                Logger::log("[WORLD] 📦 Memuat ", dropped_items_.size(), " floating items aktif di world:");
+                Logger::log("[WORLD] 📦 Memuat ", dropped_items_.size(), " floating items aktif di world (last_uid=", last_dropped_uid_, "):");
                 for (const auto& item : dropped_items_) {
                     Logger::log("       - Item ID=", item.id, " UID=", item.uid, " Count=", (int)item.count, " Pos=(", item.x, ", ", item.y, ")");
                 }
             } else {
-                Logger::log("[WORLD] 📦 World bersih: tidak ada floating items di world saat ini.");
+                Logger::log("[WORLD] 📦 World bersih: tidak ada floating items di world saat ini (last_uid=", last_dropped_uid_, ").");
             }
         }
     } catch (...) {}
@@ -461,7 +494,40 @@ void WorldState::addOrUpdateDroppedItem(uint32_t uid, uint16_t id, uint8_t count
             return;
         }
     }
+    // Cek jika item berada di posisi fisik yang sama persis (<= 16px)
+    for (auto& item : dropped_items_) {
+        float dx = item.x - x;
+        float dy = item.y - y;
+        if (dx * dx + dy * dy <= (16.0f * 16.0f)) {
+            // Posisi sama persis: perbarui data item namun pertahankan UID yang valid
+            item.id = id;
+            item.count = count;
+            item.x = x;
+            item.y = y;
+            return;
+        }
+    }
     dropped_items_.push_back({uid, id, count, x, y});
+    if (uid > last_dropped_uid_) {
+        last_dropped_uid_ = uid;
+    }
+}
+
+uint32_t WorldState::allocateNextDroppedUid() {
+    std::lock_guard<std::mutex> lock(mtx_);
+    return ++last_dropped_uid_;
+}
+
+uint32_t WorldState::getLastDroppedUid() const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    return last_dropped_uid_;
+}
+
+void WorldState::setLastDroppedUid(uint32_t uid) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (uid > last_dropped_uid_) {
+        last_dropped_uid_ = uid;
+    }
 }
 
 void WorldState::removeDroppedItem(uint32_t uid) {
@@ -618,8 +684,8 @@ int WorldState::getItemCount(uint16_t item_id) {
 
 bool WorldState::canPickupItem(uint16_t item_id) {
     std::lock_guard<std::mutex> lock(mtx_);
-    // Gems (ID 112) tidak pernah memakai slot tas
-    if (item_id == 112) return true;
+    // Gems (ID 112) dan Item ID 0 (untyped drop di GTPS) tidak pernah memakai slot tas
+    if (item_id == 0 || item_id == 112) return true;
 
     // Jika data inventory belum diterima atau slot 0, izinkan mencoba pickup
     if (inventory_slots_ == 0 || inventory_.empty()) return true;
@@ -627,13 +693,9 @@ bool WorldState::canPickupItem(uint16_t item_id) {
     // Jika slot tas masih tersedia
     if (inventory_.size() < inventory_slots_) return true;
 
-    // Jika tas penuh, periksa apakah item ID sudah ada di tas dengan count < 250 (GTPS/CPS stack hingga 250)
-    for (const auto& item : inventory_) {
-        if (item.id == item_id && item.count < 250) {
-            return true;
-        }
-    }
-    return false;
+    // Catatan: Selalu izinkan mencoba pickup agar bot tidak menolak item secara sepihak
+    // (misalnya jika ada desinkronisasi slot antara klien dan server). Server GTPS yang akan menentukan.
+    return true;
 }
 
 void WorldState::setCanSeeGhost(bool enable) {
