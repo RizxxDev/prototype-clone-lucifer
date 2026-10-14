@@ -192,13 +192,16 @@ bool BotActions::checkPassThroughCollect(float current_x, float current_y, float
         return false;
     }
 
-    float r_tiles = (radius_tiles > 0.0f) ? radius_tiles : movement_collect_radius_.load();
+    float r_tiles = (radius_tiles >= 0.0f) ? radius_tiles : movement_collect_radius_.load();
+    int cur_tx = static_cast<int>(current_x / 32.0f);
+    int cur_ty = static_cast<int>(current_y / 32.0f);
     float max_dist = r_tiles * 32.0f;
     float max_dist_sq = max_dist * max_dist;
 
     auto now = std::chrono::steady_clock::now();
     bool collected_any = false;
     int interval_ms = pickup_delay_ms_.load();
+    if (interval_ms <= 0) interval_ms = 20;
 
     std::lock_guard<std::mutex> lock(collect_mtx_);
 
@@ -213,24 +216,53 @@ bool BotActions::checkPassThroughCollect(float current_x, float current_y, float
     }
 
     for (const auto& item : dropped) {
+        int item_tx = static_cast<int>(item.x / 32.0f);
+        int item_ty = static_cast<int>(item.y / 32.0f);
         float dx = item.x - current_x;
         float dy = item.y - current_y;
         float dist_sq = dx * dx + dy * dy;
 
-        if (dist_sq <= max_dist_sq) {
-            // Cek cooldown per UID agar tidak spam server (menghargai pickup_delay_ms_ min 250ms)
+        bool in_range = false;
+        if (r_tiles <= 0.0f) {
+            // Jarak 0 tile: bot harus ada di tile tersebut persis baru bisa diambil,
+            // dengan toleransi bounding box 24px untuk mengantisipasi item di perbatasan tile (misal selisih 2px)
+            in_range = (cur_tx == item_tx && cur_ty == item_ty) ||
+                       (std::abs(dx) <= 24.0f && std::abs(dy) <= 24.0f);
+        } else {
+            in_range = (dist_sq <= max_dist_sq);
+        }
+
+        if (in_range) {
+            // Cek cooldown per UID (delay interval 20ms)
             auto it = collect_cooldowns_.find(item.uid);
             int attempts = collect_attempts_[item.uid];
             if (it != collect_cooldowns_.end()) {
                 auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second).count();
-                // Jika sudah gagal berkali-kali (>= 5x), backoff 2.5s agar tidak spam paket ke server
-                int min_retry_delay = (attempts >= 5) ? 2500 : std::max(250, interval_ms);
+                // 20ms ultra-fast retry
+                int min_retry_delay = std::max(20, interval_ms);
                 if (elapsed < min_retry_delay) continue;
             }
 
             collect_cooldowns_[item.uid] = now;
             collect_attempts_[item.uid] = attempts + 1;
+
+            // Kirim paket collect utama
             collect(static_cast<int>(item.uid), current_x, current_y, item.x, item.y);
+
+            // Adaptive Neighbor Probing:
+            // Pada GTPS tertentu atau jika drop terjadi off-screen / desync, UID di server bisa selisih 1-2.
+            // Jika percobaan awal (attempts >= 2) belum berhasil memicu Tank 14 collect dari server,
+            // lakukan probing ke UID tetangga yang berdekatan.
+            if (attempts == 2 && item.uid > 1) {
+                collect(static_cast<int>(item.uid - 1), current_x, current_y, item.x, item.y);
+            } else if (attempts == 3) {
+                collect(static_cast<int>(item.uid + 1), current_x, current_y, item.x, item.y);
+            } else if (attempts == 4 && item.uid > 2) {
+                collect(static_cast<int>(item.uid - 2), current_x, current_y, item.x, item.y);
+            } else if (attempts == 5) {
+                collect(static_cast<int>(item.uid + 2), current_x, current_y, item.x, item.y);
+            }
+
             Logger::log("[ACTION] 🧲 [Auto-Movement] Menyerap floating item ID=", item.id, " UID=", item.uid, " (", (int)item.count, "x) di Pos=(", item.x, ", ", item.y, ")");
             collected_any = true;
         }
@@ -243,6 +275,12 @@ void BotActions::clearCollectCooldown(uint32_t uid) {
     std::lock_guard<std::mutex> lock(collect_mtx_);
     collect_cooldowns_.erase(uid);
     collect_attempts_.erase(uid);
+    if (uid > 1) {
+        collect_cooldowns_.erase(uid - 1);
+        collect_attempts_.erase(uid - 1);
+    }
+    collect_cooldowns_.erase(uid + 1);
+    collect_attempts_.erase(uid + 1);
 }
 
 bool BotActions::collectObject(uint32_t uid, float range_tiles) {
@@ -580,7 +618,7 @@ void AutoCollectController::passiveProximityWorker() {
                 }
             }
         }
-        int tick_delay = std::max(120, actions_.getPickupDelay());
+        int tick_delay = std::max(10, actions_.getPickupDelay());
         std::this_thread::sleep_for(std::chrono::milliseconds(tick_delay));
     }
 }
@@ -705,48 +743,50 @@ void AutoCollectController::collectLoop(uint16_t filter_item_id, int delay_ms, f
         int target_tx = static_cast<int>(best_item->x / 32.0f);
         int target_ty = static_cast<int>(best_item->y / 32.0f);
 
-        // Jika jarak > 1.2 tile, jalan mendekat menggunakan pathfinding
-        if (best_dist_sq > (38.0f * 38.0f)) {
-            if (ptx != target_tx || pty != target_ty) {
-                bool can_fly = actions_.isModFly();
-                auto waypoints = world_.findPath(ptx, pty, target_tx, target_ty, can_fly);
-                if (waypoints.empty()) {
-                    actions_.moveTo(target_tx, target_ty);
-                } else {
-                    for (const auto& wp : waypoints) {
-                        if (!running_) break;
-                        actions_.moveTo(wp.first, wp.second);
-                        std::this_thread::sleep_for(std::chrono::milliseconds(actions_.getSpeed()));
-                    }
+        // Jika belum berada di tile item, jalan mendekat menggunakan pathfinding
+        if (ptx != target_tx || pty != target_ty) {
+            bool can_fly = actions_.isModFly();
+            auto waypoints = world_.findPath(ptx, pty, target_tx, target_ty, can_fly);
+            if (waypoints.empty()) {
+                actions_.moveTo(target_tx, target_ty);
+            } else {
+                for (const auto& wp : waypoints) {
+                    if (!running_) break;
+                    actions_.moveTo(wp.first, wp.second);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(actions_.getSpeed()));
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
 
         if (!running_) break;
 
-        // Ambil item jika dalam jangkauan
+        // Ambil item: bot harus berada di tile tersebut persis baru diambil
         float cur_px = 0.0f, cur_py = 0.0f;
         int cur_tx = 0, cur_ty = 0;
         world_.getLocalPos(cur_px, cur_py, cur_tx, cur_ty);
 
-        float dx = best_item->x - cur_px;
-        float dy = best_item->y - cur_py;
-        if (dx * dx + dy * dy <= (48.0f * 48.0f)) {
-            actions_.collect(static_cast<int>(best_item->uid), cur_px, cur_py, best_item->x, best_item->y);
-            recordCollected(best_item->uid);
-
+        if (cur_tx == target_tx && cur_ty == target_ty) {
+            int retries = 0;
             {
                 std::lock_guard<std::mutex> lock(retry_mtx_);
-                retry_counts_[best_item->uid]++;
+                retries = retry_counts_[best_item->uid]++;
             }
+
+            actions_.collect(static_cast<int>(best_item->uid), cur_px, cur_py, best_item->x, best_item->y);
+            if (retries == 1 && best_item->uid > 1) {
+                actions_.collect(static_cast<int>(best_item->uid - 1), cur_px, cur_py, best_item->x, best_item->y);
+            } else if (retries >= 2) {
+                actions_.collect(static_cast<int>(best_item->uid + 1), cur_px, cur_py, best_item->x, best_item->y);
+            }
+            recordCollected(best_item->uid);
 
             int d = delay_ms_.load();
             if (d <= 0) d = 600;
             AntiDetection::sleepWithJitter(d, std::max(10, (int)(d * 0.15f)));
             AntiDetection::maybeHumanPause(0.02f, 100, 250);
         } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
     }
 

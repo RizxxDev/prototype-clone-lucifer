@@ -374,4 +374,42 @@ Panel visual realtime pada tab Automation menampilkan:
 - Tracking item terdekat (Item ID, UID, dan jarak dalam tile).
 - Status aktif detak scanner daemon (ms) dan counter total item yang berhasil diserap sesi ini.
 
+---
+
+## 25. GTPS Tile Extra Data Truncation, UID Overflow Prevention & Hitbox Boundary Tolerancing
+
+### A. Gejala & Temuan Root Cause: Kegagalan Pengambilan Item Berulang
+Melalui live debugging log dan trace paket ENet, ditemukan penyebab mengapa bot mengalami kegagalan total saat mengambil item di GTPS kustom (misal `snecks`):
+
+1. **Early Termination Pembacaan Tile & False-Clean World Parser**:
+   - Format tile GTPS custom (misal tipe lock/door khusus) menyebabkan `WorldState::parseMapData` berhenti lebih awal sebelum mencapai akhir buffer data tile (`remaining > 20,000` byte).
+   - Jalur pembacaan langsung (Jalur A) sebelumnya membaca 8 byte pada posisi arbitrary tersebut: 4 byte bernilai `00 00 00 00` (`d_count == 0`), diikuti 4 byte `00 08 00 0E` (`last_uid == 234883072` / 234 juta).
+   - Nilai 234883072 ini sesungguhnya adalah representasi byte tile Growtopia (`tile flags 0x0800` dan `item_id 14`), bukan UID dropped item!
+   - Akibatnya:
+     - Parser menetapkan `last_dropped_uid_ = 234883072` dan menganggap world bersih (0 items).
+     - Signature Scanner (Jalur B) tidak pernah dieksekusi.
+     - Setiap item yang baru jatuh dialokasikan dengan UID fantastis `234883073, 234883074, dst.`.
+     - Server GTPS yang menggunakan counter integer kecil (1, 2, 3...) menolak seluruh paket collect karena UID 234883073 tidak ada di server.
+     - Ketika pemain lain mengambil item (server broadcast Tank 14 dengan `main_data = 17`), fungsi `setLastDroppedUid(17)` mengabaikannya karena pengecekan `if (uid > last_dropped_uid_)` gagal (`17 > 234883072 == false`).
+
+2. **Tile Boundary Truncation Bug pada Jarak 0-Tile**:
+   - Posisi fisik item di Growtopia sering jatuh beberapa pixel di dekat tepi tile (misal $x = 542$ px, $y = 781$ px).
+   - Sementara avatar bot berdiri di koordinat $x = 544$ px, $y = 768$ px (hanya selisih 2 pixel!).
+   - Pembagian integer tile (`544 / 32 = 17` vs `542 / 32 = 16`) menyebabkan perbandingan `cur_tx == item_tx` menghasilkan `17 == 16` (FALSE).
+   - Bot menolak menyerap item padahal secara fisik berdiri tepat di atas item tersebut!
+
+### B. Solusi Komprehensif & Robustness Guard
+1. **Sanitasi Keras UID (`< 5,000,000`) & Inisialisasi Ulang**:
+   - `last_dropped_uid_ = 0` selalu direset bersih setiap kali map data baru dimuat.
+   - Jalur A hanya menerima `d_count == 0` jika `rem <= 24` dan `last_uid < 5000000`.
+   - Jalur B Signature Scanner memindai maju untuk seluruh world dengan floating items.
+   - Jika world tidak memiliki floating items (`!parsed_dropped`), tail scanner memindai 64 byte terakhir buffer map data untuk menemukan header count 0 dan last_uid asli server.
+   - `setLastDroppedUid` dan `allocateNextDroppedUid` memiliki clamp pelindung: jika counter $\ge 5000000$, counter seketika di-reset ke 0 atau disinkronkan ke UID valid dari server.
+2. **Tolerance Box 24px pada Mode 0-Tile**:
+   - Pengecekan jarak 0-tile diperbarui menjadi:
+     `(cur_tx == item_tx && cur_ty == item_ty) || (std::abs(dx) <= 24.0f && std::abs(dy) <= 24.0f)`.
+   - Ini menjamin item yang berada di perbatasan tile (selisih 1-24 pixel) diserap seketika tanpa terhalang pembulatan integer grid tile.
+3. **Desync-Tolerant Item Removal**:
+   - Saat menerima Tank 14 collect packet, jika UID eksak tidak ditemukan dalam cache memori lokal bot (karena desync counter), fungsi `removeDroppedItem` mencari dan menghapus item terdekat dengan selisih UID $\le 2$.
+   - Mencegah timbulnya ghost items di memori bot.
 

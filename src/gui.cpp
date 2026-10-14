@@ -2506,13 +2506,14 @@ void LuciferGui::renderSubTabAutomation() {
 
     float cur_rad = cur_collect.getProximityRadius();
     ImGui::SetNextItemWidth(180);
-    if (ImGui::SliderFloat("Proximity Radius (Tile)##prox_rad", &cur_rad, 1.0f, 4.0f, "%.1f Tile")) {
+    const char* rad_fmt = (cur_rad <= 0.05f) ? "0.0 Tile (Satu Tile)" : "%.1f Tile";
+    if (ImGui::SliderFloat("Proximity Radius (Tile)##prox_rad", &cur_rad, 0.0f, 4.0f, rad_fmt)) {
         cur_collect.setProximityRadius(cur_rad);
         if (bot) bot->getActions().setMovementCollectRadius(cur_rad);
         else actions_.setMovementCollectRadius(cur_rad);
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("(Rekomendasi: 1.5 Tile)");
+    ImGui::TextDisabled("(Rekomendasi: 0.0 Tile / Satu Tile)");
 
     ImGui::SetNextItemWidth(140);
     ImGui::InputInt("Filter Item ID##collect_id", &collect_filter_id_);

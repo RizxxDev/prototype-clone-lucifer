@@ -32,3 +32,4 @@ items.dat
 *.enc
 *_enc
 *.log
+scratch/

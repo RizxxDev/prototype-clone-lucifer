@@ -335,13 +335,19 @@ void WorldState::parseMapData(const uint8_t* extra_data, size_t size) {
             // Parsing Dropped Items (Floating Objects)
             // ============================================================
             dropped_items_.clear();
+            last_dropped_uid_ = 0;
             bool parsed_dropped = false;
 
-            // Jalur A: Forward parsing jika pembacaan tile tepat berakhir di header dropped items
+            // Jalur A: Forward parsing HANYA jika pembacaan tile tepat mencapai akhir buffer (remaining <= 24)
+            // ATAU d_count > 0 dengan data item valid. JANGAN izinkan d_count == 0 dari sisa buffer besar!
             if (reader.ok() && reader.remaining() >= 8) {
+                size_t rem = reader.remaining();
                 uint32_t d_count = reader.u32();
                 uint32_t last_uid = reader.u32();
-                if (d_count > 0 && d_count <= 4000 && reader.remaining() >= d_count * 16) {
+                if (d_count == 0 && rem <= 24 && last_uid > 0 && last_uid < 5000000) {
+                    last_dropped_uid_ = last_uid;
+                    parsed_dropped = true;
+                } else if (d_count > 0 && d_count <= 4000 && reader.remaining() >= d_count * 16) {
                     bool all_valid = true;
                     std::vector<DroppedItem> temp_items;
                     temp_items.reserve(d_count);
@@ -355,11 +361,12 @@ void WorldState::parseMapData(const uint8_t* extra_data, size_t size) {
                         (void)flags;
                         uint32_t uid = reader.u32();
 
-                        // Item ID 0 diperbolehkan (khas GTPS untuk Gems/untyped drops)
-                        if (item_id > 25000 ||
-                            std::isnan(ox) || std::isinf(ox) || ox < 0.0f || ox > 6400.0f ||
-                            std::isnan(oy) || std::isinf(oy) || oy < 0.0f || oy > 6400.0f ||
-                            count == 0) {
+                        if (item_id == 0 || item_id > 25000 ||
+                            count == 0 || count > 250 ||
+                            std::isnan(ox) || std::isinf(ox) || std::fpclassify(ox) != FP_NORMAL ||
+                            std::isnan(oy) || std::isinf(oy) || std::fpclassify(oy) != FP_NORMAL ||
+                            ox < 0.0f || ox > (width_ * 32.0f + 64.0f) ||
+                            oy < 0.0f || oy > (height_ * 32.0f + 64.0f)) {
                             all_valid = false;
                             break;
                         }
@@ -380,14 +387,19 @@ void WorldState::parseMapData(const uint8_t* extra_data, size_t size) {
                 }
             }
 
-            // Jalur B: Signature / Heuristic Scanner memindai dari akhir buffer mundur ke depan
+            // Jalur B: Signature / Heuristic Scanner memindai maju untuk menemukan blok dropped items utuh
             // Sangat andal menjamin dropped items ditemukan meskipun ada tile extra GTPS custom.
             if (!parsed_dropped && size >= 24) {
                 size_t min_scan = (tile_start_offset > 0) ? (tile_start_offset + tile_count * 4) : 64;
                 size_t max_scan = (size >= 24) ? (size - 24) : 0;
                 if (min_scan > max_scan) min_scan = 64;
 
-                for (size_t offset = max_scan; offset >= min_scan; --offset) {
+                std::vector<DroppedItem> best_items;
+                uint32_t best_last_uid = 0;
+                size_t best_offset = 0;
+                size_t best_trailing = 0;
+
+                for (size_t offset = min_scan; offset <= max_scan; ++offset) {
                     uint32_t cand_count = *reinterpret_cast<const uint32_t*>(extra_data + offset);
                     size_t header_len = 8;
                     uint32_t last_uid_header = 0;
@@ -427,10 +439,12 @@ void WorldState::parseMapData(const uint8_t* extra_data, size_t size) {
                         (void)flags;
                         uint32_t uid = *reinterpret_cast<const uint32_t*>(p + 12);
 
-                        if (item_id > 25000 ||
-                            std::isnan(ox) || std::isinf(ox) || ox < 0.0f || ox > 6400.0f ||
-                            std::isnan(oy) || std::isinf(oy) || oy < 0.0f || oy > 6400.0f ||
-                            count == 0) {
+                        if (item_id == 0 || item_id > 25000 ||
+                            count == 0 || count > 250 ||
+                            std::isnan(ox) || std::isinf(ox) || std::fpclassify(ox) != FP_NORMAL ||
+                            std::isnan(oy) || std::isinf(oy) || std::fpclassify(oy) != FP_NORMAL ||
+                            ox < 0.0f || ox > (width_ * 32.0f + 64.0f) ||
+                            oy < 0.0f || oy > (height_ * 32.0f + 64.0f)) {
                             valid = false;
                             break;
                         }
@@ -449,13 +463,43 @@ void WorldState::parseMapData(const uint8_t* extra_data, size_t size) {
                     }
 
                     if (valid && !temp_items.empty()) {
-                        dropped_items_ = std::move(temp_items);
-                        last_dropped_uid_ = max_item_uid;
-                        parsed_dropped = true;
-                        Logger::log("[WORLD] 🔍 Signature Scanner menemukan ", dropped_items_.size(), " floating items pada offset ", offset, " (trailing=", trailing_bytes, " bytes, last_uid=", last_dropped_uid_, ")");
-                        break;
+                        // Pilih kandidat dengan jumlah floating items terbanyak dan valid
+                        if (temp_items.size() > best_items.size()) {
+                            best_items = std::move(temp_items);
+                            best_last_uid = max_item_uid;
+                            best_offset = offset;
+                            best_trailing = trailing_bytes;
+                        }
                     }
                 }
+
+                if (!best_items.empty()) {
+                    dropped_items_ = std::move(best_items);
+                    last_dropped_uid_ = best_last_uid;
+                    parsed_dropped = true;
+                    Logger::log("[WORLD] 🔍 Signature Scanner menemukan ", dropped_items_.size(), " floating items pada offset ", best_offset, " (trailing=", best_trailing, " bytes, last_uid=", last_dropped_uid_, ")");
+                }
+            }
+
+            // Fallback jika world tidak memiliki floating items (count == 0)
+            // Pindai 64 byte terakhir dari map data untuk mendeteksi header dropped items kosong: count == 0 & last_uid valid
+            if (!parsed_dropped && size >= 8) {
+                size_t tail_start = (size >= 64) ? (size - 64) : 0;
+                for (size_t off = size - 8; off >= tail_start; --off) {
+                    uint32_t cand_c = *reinterpret_cast<const uint32_t*>(extra_data + off);
+                    uint32_t cand_uid = *reinterpret_cast<const uint32_t*>(extra_data + off + 4);
+                    if (cand_c == 0 && cand_uid > 0 && cand_uid < 5000000) {
+                        last_dropped_uid_ = cand_uid;
+                        parsed_dropped = true;
+                        Logger::log("[WORLD] 🔍 Header dropped items kosong ditemukan di offset tail ", off, " (last_uid=", last_dropped_uid_, ")");
+                        break;
+                    }
+                    if (off == 0) break;
+                }
+            }
+
+            if (!parsed_dropped || last_dropped_uid_ >= 5000000) {
+                last_dropped_uid_ = 0;
             }
 
             if (!dropped_items_.empty()) {
@@ -494,27 +538,17 @@ void WorldState::addOrUpdateDroppedItem(uint32_t uid, uint16_t id, uint8_t count
             return;
         }
     }
-    // Cek jika item berada di posisi fisik yang sama persis (<= 16px)
-    for (auto& item : dropped_items_) {
-        float dx = item.x - x;
-        float dy = item.y - y;
-        if (dx * dx + dy * dy <= (16.0f * 16.0f)) {
-            // Posisi sama persis: perbarui data item namun pertahankan UID yang valid
-            item.id = id;
-            item.count = count;
-            item.x = x;
-            item.y = y;
-            return;
-        }
-    }
     dropped_items_.push_back({uid, id, count, x, y});
-    if (uid > last_dropped_uid_) {
+    if (uid < 5000000 && (last_dropped_uid_ >= 5000000 || uid > last_dropped_uid_)) {
         last_dropped_uid_ = uid;
     }
 }
 
 uint32_t WorldState::allocateNextDroppedUid() {
     std::lock_guard<std::mutex> lock(mtx_);
+    if (last_dropped_uid_ >= 5000000) {
+        last_dropped_uid_ = 0;
+    }
     return ++last_dropped_uid_;
 }
 
@@ -525,18 +559,29 @@ uint32_t WorldState::getLastDroppedUid() const {
 
 void WorldState::setLastDroppedUid(uint32_t uid) {
     std::lock_guard<std::mutex> lock(mtx_);
-    if (uid > last_dropped_uid_) {
-        last_dropped_uid_ = uid;
+    if (uid < 5000000) {
+        if (last_dropped_uid_ >= 5000000 || uid > last_dropped_uid_) {
+            last_dropped_uid_ = uid;
+        }
     }
 }
 
 void WorldState::removeDroppedItem(uint32_t uid) {
     std::lock_guard<std::mutex> lock(mtx_);
-    dropped_items_.erase(
-        std::remove_if(dropped_items_.begin(), dropped_items_.end(),
-                       [uid](const DroppedItem& item) { return item.uid == uid; }),
-        dropped_items_.end()
-    );
+    auto it = std::find_if(dropped_items_.begin(), dropped_items_.end(),
+                           [uid](const DroppedItem& item) { return item.uid == uid; });
+    if (it != dropped_items_.end()) {
+        dropped_items_.erase(it);
+    } else {
+        // Fallback desync tolerance: cari item terdekat dengan selisih UID <= 2
+        auto it_near = std::find_if(dropped_items_.begin(), dropped_items_.end(),
+                                   [uid](const DroppedItem& item) {
+                                       return (item.uid > uid ? item.uid - uid : uid - item.uid) <= 2;
+                                   });
+        if (it_near != dropped_items_.end()) {
+            dropped_items_.erase(it_near);
+        }
+    }
 }
 
 void WorldState::removeDroppedItemByPos(float x, float y, float tolerance) {

@@ -60,7 +60,7 @@ public:
     // Movement-Integrated Auto-Collect Configuration
     void setPickupDelay(int ms) { pickup_delay_ms_.store(std::clamp(ms, 10, 1000)); }
     int  getPickupDelay() const { return pickup_delay_ms_.load(); }
-    void setMovementCollectRadius(float radius_tiles) { movement_collect_radius_.store(std::max(0.5f, radius_tiles)); }
+    void setMovementCollectRadius(float radius_tiles) { movement_collect_radius_.store(std::max(0.0f, radius_tiles)); }
     float getMovementCollectRadius() const { return movement_collect_radius_.load(); }
     void setAutoCollectOnMove(bool enable) { auto_collect_on_move_.store(enable); }
     bool isAutoCollectOnMove() const { return auto_collect_on_move_.load(); }
@@ -92,7 +92,7 @@ private:
 
     // Movement-integrated Auto Collect parameters
     std::atomic<int> pickup_delay_ms_{20}; // Delay interval 20ms
-    std::atomic<float> movement_collect_radius_{2.5f}; // Radius default 2.5 tile (80 px)
+    std::atomic<float> movement_collect_radius_{0.0f}; // Radius default 0.0 tile (bot harus berada di tile yang sama)
     std::atomic<bool> auto_collect_on_move_{true};
     std::atomic<uint32_t> last_collected_uid_{0};
     std::atomic<int> total_collected_count_{0};
@@ -145,7 +145,7 @@ public:
     int getDelayMs() const { return delay_ms_.load(); }
     void setPassiveEnabled(bool en);
     bool isPassiveEnabled() const { return passive_enabled_.load(); }
-    void setProximityRadius(float radius_tiles) { proximity_radius_.store(std::max(0.5f, radius_tiles)); }
+    void setProximityRadius(float radius_tiles) { proximity_radius_.store(std::max(0.0f, radius_tiles)); }
     float getProximityRadius() const { return proximity_radius_.load(); }
 
     // Telemetry & Monitoring
@@ -173,7 +173,7 @@ private:
     WorldState& world_;
     std::atomic<bool> running_{false};
     std::atomic<bool> passive_enabled_{true}; // Always ON by default as base feature
-    std::atomic<float> proximity_radius_{2.5f}; // Radius default 2.5 tile (80 px)
+    std::atomic<float> proximity_radius_{0.0f}; // Radius default 0.0 tile (bot harus berada di tile yang sama)
     std::atomic<uint16_t> filter_item_id_{0};
     std::atomic<int> delay_ms_{600};
     std::thread worker_;

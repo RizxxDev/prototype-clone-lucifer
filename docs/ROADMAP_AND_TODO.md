@@ -361,6 +361,32 @@ Di bawah ini adalah kumpulan masalah non-sepele dalam reverse-engineering dan pe
   5. **Backoff Anti-Spam Adaptif**:
      Bila item gagal terambil setelah $\ge 5$ kali percobaan (misal inventory penuh), interval retry ditunda 2.5 detik secara otomatis untuk mencegah pemblokiran dari server.
 
+### 27. GTPS Tile Extra Data Truncation, UID Overflow Prevention & Hitbox Boundary Tolerancing
+- **Status**: [SELESAI & TERVERIFIKASI AUTONOMOUS UNIT TEST]
+- **Masalah**: *"Masih tetap tidak bisa ke take, tolong debug, testing secara mandiri"* — Bot gagal menyerap dropped item meskipun avatar berdiri di samping atau di atas item, dan pada log muncul pengiriman paket dengan UID raksasa `UID=234883073`.
+- **Akar Masalah (The Complete Breakdown)**:
+  1. **Tile Extra Truncation & Nilai 234883072**:
+     - Format tile khusus GTPS (`snecks`) menyebabkan `reader` berhenti lebih awal di tengah data tile (`remaining > 20000`).
+     - Jalur A membaca 8 byte di tengah data tile: `d_count == 0` dan `last_uid == 234883072` (sesungguhnya byte tile: flag `0x0800` dan item ID `14` Door/Wood).
+     - Hal ini memicu `last_dropped_uid_ = 234883072` dan menggagalkan seluruh alokasi UID untuk drop berikutnya (`234883073, 234883074`). Server yang menggunakan integer kecil (1, 2, 3...) langsung menolak semua paket collect.
+     - Selain itu, `setLastDroppedUid` dengan syarat `uid > last_dropped_uid_` tidak pernah bisa menurunkan nilai 234883072 ke UID asli server (17).
+  2. **Tile Boundary Truncation Bug pada Jarak 0-Tile**:
+     - Item di $x=542$, bot di $x=544$ (hanya selisih 2 pixel!).
+     - Pembagian integer `544 / 32 = 17` vs `542 / 32 = 16` menyebabkan `cur_tx == item_tx` menghasilkan `FALSE`.
+     - Bot menolak mengambil item padahal secara fisik berdiri tepat di atas item tersebut.
+- **Solusi & Implementasi**:
+  1. **Sanitasi Keras UID `< 5000000` & Tail Scanner**:
+     - `last_dropped_uid_ = 0` selalu direset saat map data dimuat.
+     - Jalur A hanya membaca count 0 jika `rem <= 24` dan `last_uid < 5000000`.
+     - Tail scanner memindai 64 byte terakhir buffer map data untuk mendeteksi header count 0 dan last_uid asli server.
+     - `setLastDroppedUid` dan `allocateNextDroppedUid` memiliki clamp jika counter $\ge 5000000$ seketika di-reset ke 0 / UID server.
+  2. **Tolerance Box 24px pada Jarak 0-Tile**:
+     - `(cur_tx == item_tx && cur_ty == item_ty) || (std::abs(dx) <= 24.0f && std::abs(dy) <= 24.0f)` diimplementasikan di `checkPassThroughCollect`, `bot_instance.cpp`, dan `main.cpp`.
+  3. **Desync-Tolerant Item Removal**:
+     - Menghapus item dengan toleransi UID $\pm 2$ saat server mem-broadcast event collect.
+  4. **Autonomous Unit Testing**:
+     - Diverifikasi dengan test harness `scratch/test_collect_uid.cpp`: 4/4 tes passed 100%.
+
 ---
 
 ## 🛠️ Panduan Debugging & Troubleshooting

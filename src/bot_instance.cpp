@@ -608,9 +608,20 @@ void BotInstance::setupPacketHandlers() {
                         (item_pkt.target_net_id > 0 ? item_pkt.target_net_id : 0)
                     );
                     if (collected_uid > 0) {
+                        world_->setLastDroppedUid(collected_uid);
                         world_->removeDroppedItem(collected_uid);
                         if (actions_) {
                             actions_->clearCollectCooldown(collected_uid);
+                        }
+                    }
+                    // Jika yang mengambil adalah bot lokal kita, bersihkan juga item di dekat posisi bot (toleransi 96px)
+                    // untuk mengantisipasi jika item di world disimpan dengan UID desync
+                    if (item_pkt.net_id == world_->getLocalNetId()) {
+                        float bx = 0.0f, by = 0.0f;
+                        int btx = 0, bty = 0;
+                        world_->getLocalPos(bx, by, btx, bty);
+                        if (bx > 0.0f || by > 0.0f) {
+                            world_->removeDroppedItemByPos(bx, by, 96.0f);
                         }
                     }
                     Logger::log("[BOT #", id_, "] 💨 Dropped Item terambil/hilang: UID=", collected_uid, " CollectorNetID=", item_pkt.net_id);
@@ -655,15 +666,35 @@ void BotInstance::setupPacketHandlers() {
                                 " DropperNetID=", dropper_net,
                                 " Pos=(", item_pkt.pos_x, ", ", item_pkt.pos_y, ")");
 
-                    // Auto-collect jika item jatuh tepat di dekat posisi bot (spawn at feet / sehabis memukul blok)
+                    // Auto-collect jika item jatuh di tile bot (atau dalam radius jika diatur > 0)
                     float bx = 0.0f, by = 0.0f;
                     int btx = 0, bty = 0;
                     world_->getLocalPos(bx, by, btx, bty);
+                    int item_tx = static_cast<int>(item_pkt.pos_x / 32.0f);
+                    int item_ty = static_cast<int>(item_pkt.pos_y / 32.0f);
+
+                    float rad = actions_ ? actions_->getMovementCollectRadius() : 0.0f;
                     float dx = item_pkt.pos_x - bx;
                     float dy = item_pkt.pos_y - by;
-                    if (dx * dx + dy * dy <= (96.0f * 96.0f)) {
-                        if (autocollect_) autocollect_->triggerPassThroughCollect(bx, by);
-                        else actions_->checkPassThroughCollect(bx, by);
+                    bool should_collect = false;
+                    if (rad <= 0.0f) {
+                        should_collect = (btx == item_tx && bty == item_ty) ||
+                                         (std::abs(dx) <= 24.0f && std::abs(dy) <= 24.0f);
+                    } else {
+                        float max_px = rad * 32.0f;
+                        should_collect = (dx * dx + dy * dy <= (max_px * max_px));
+                    }
+
+                    if (should_collect) {
+                        if (actions_) {
+                            actions_->collect(static_cast<int>(uid), bx, by, item_pkt.pos_x, item_pkt.pos_y);
+                        }
+                        if (autocollect_) {
+                            autocollect_->recordCollected(uid);
+                            autocollect_->triggerPassThroughCollect(bx, by);
+                        } else if (actions_) {
+                            actions_->checkPassThroughCollect(bx, by);
+                        }
                     }
                 }
             }
