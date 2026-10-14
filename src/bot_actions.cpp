@@ -30,34 +30,41 @@ void BotActions::moveTo(int tile_x, int tile_y, int step_delay_ms) {
     float target_x = static_cast<float>(tile_x * 32);
     float target_y = static_cast<float>(tile_y * 32);
 
+    int net_id = world_.getLocalNetId();
+    if (net_id < 0) net_id = -1;
+
     int dx = tile_x - cur_tx;
     int dy = tile_y - cur_ty;
     int steps = std::max(std::abs(dx), std::abs(dy));
 
+    // Jika sudah berada di tile yang sama, tetap sinkronkan posisi ke server lalu cek collect
     if (steps == 0) {
+        uint32_t flags = mod_fly_.load() ? TankFlags::FLYING : TankFlags::ON_GROUND;
+        auto pkt = TankPacketHelper::createState(net_id, target_x, target_y, flags);
+        sendTankPacket(pkt);
+        world_.setLocalPos(target_x, target_y);
         triggerMovementCollect(target_x, target_y);
         return;
     }
-
-    int net_id = world_.getLocalNetId();
-    if (net_id < 0) net_id = -1;
 
     int delay = (step_delay_ms > 0) ? step_delay_ms : speed_delay_.load();
 
     if (steps <= 1 || delay <= 0) {
         uint32_t flags = mod_fly_.load() ? TankFlags::FLYING : TankFlags::ON_GROUND;
         if (target_x < cur_x) flags |= TankFlags::FACING_LEFT;
+
         auto pkt = TankPacketHelper::createState(net_id, target_x, target_y, flags);
         sendTankPacket(pkt);
         world_.setLocalPos(target_x, target_y);
         triggerMovementCollect(target_x, target_y);
-        Logger::log("[ACTION] 🚶 Bergerak ke tile (", tile_x, ", ", tile_y, ") [Pixel: ", target_x, ", ", target_y, "]");
+
+        Logger::log("[ACTION]   Bergerak ke tile (", tile_x, ", ", tile_y, ") [Pixel: ", target_x, ", ", target_y, "]");
     } else {
         bool flying = mod_fly_.load();
-        // Multi-langkah (misal step 2, 3, 5): jalankan di background thread agar TIDAK memblokir ENet poll / GUI
         std::thread([this, cur_x, cur_y, target_x, target_y, tile_x, tile_y, steps, delay, net_id, flying]() {
             for (int i = 1; i <= steps; ++i) {
                 if (!enet_.isConnected()) break;
+
                 float progress = static_cast<float>(i) / static_cast<float>(steps);
                 float step_x = cur_x + (target_x - cur_x) * progress;
                 float step_y = cur_y + (target_y - cur_y) * progress;
@@ -75,7 +82,7 @@ void BotActions::moveTo(int tile_x, int tile_y, int step_delay_ms) {
                     AntiDetection::maybeHumanPause(0.015f, 60, 150);
                 }
             }
-            Logger::log("[ACTION] 🚶 Selesai bergerak ke tile (", tile_x, ", ", tile_y, ") [Pixel: ", target_x, ", ", target_y, "]");
+            Logger::log("[ACTION]   Selesai bergerak ke tile (", tile_x, ", ", tile_y, ") [Pixel: ", target_x, ", ", target_y, "]");
         }).detach();
     }
 }
@@ -113,13 +120,13 @@ void BotActions::wrench(int tile_x, int tile_y) {
     // Wrench item ID di Growtopia adalah 32
     auto pkt = TankPacketHelper::createTileChange(world_.getLocalNetId(), tile_x, tile_y, 32, px, py);
     sendTankPacket(pkt);
-    Logger::log("[ACTION] 🔧 Wrench tile (", tile_x, ", ", tile_y, ")");
+    Logger::log("[ACTION]   Wrench tile (", tile_x, ", ", tile_y, ")");
 }
 
 void BotActions::wrenchPlayer(int net_id) {
     if (!enet_.isConnected()) return;
     enet_.sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT, "action|wrench\nnetid|" + std::to_string(net_id) + "\n");
-    Logger::log("[ACTION] 🔧 Wrench player NetID=", net_id);
+    Logger::log("[ACTION]   Wrench player NetID=", net_id);
 }
 
 void BotActions::enter() {
@@ -131,7 +138,7 @@ void BotActions::enter() {
 
     auto pkt = TankPacketHelper::createTileActivate(world_.getLocalNetId(), cur_tx, cur_ty, px, py);
     sendTankPacket(pkt);
-    Logger::log("[ACTION] 🚪 Mengaktifkan pintu/portal di tile (", cur_tx, ", ", cur_ty, ")");
+    Logger::log("[ACTION]   Mengaktifkan pintu/portal di tile (", cur_tx, ", ", cur_ty, ")");
 }
 
 void BotActions::collect(int object_uid, float px, float py, float item_x, float item_y) {
@@ -159,19 +166,26 @@ void BotActions::collect(int object_uid, float px, float py, float item_x, float
         }
     }
 
-    // Format V1 (Classic Proton GTPS): net_id = object_uid, pos = player_pos
-    auto pkt_v1 = TankPacketHelper::createCollectObject(object_uid, px, py);
-    sendTankPacket(pkt_v1);
+    // Jika bot berada di dekat item (<= 1.5 tile / 48px), sinkronkan PACKET_STATE ke koordinat item
+    // agar pemeriksaan jarak antara posisi player di server dan posisi item selalu valid
+    float dx = item_x - px;
+    float dy = item_y - py;
+    if (dx * dx + dy * dy <= (48.0f * 48.0f)) {
+        int local_net = world_.getLocalNetId();
+        if (local_net < 0) local_net = -1;
+        uint32_t flags = mod_fly_.load() ? TankFlags::FLYING : TankFlags::ON_GROUND;
+        auto state_pkt = TankPacketHelper::createState(local_net, item_x, item_y, flags);
+        sendTankPacket(state_pkt);
+    }
 
-    // Format V2 (Modern CPS / Lucifer GTPS): net_id = local_net_id, main_data = object_uid, pos = item_pos
-    int local_net = world_.getLocalNetId();
-    auto pkt_v2 = TankPacketHelper::createCollectObjectV2(object_uid, local_net, item_x, item_y);
-    sendTankPacket(pkt_v2);
+    // Kirim paket collect standar Growtopia (Type 11: net_id = -1, target_net_id = 0, main_data = object_uid)
+    auto pkt = TankPacketHelper::createCollectObject(object_uid, item_x, item_y);
+    sendTankPacket(pkt);
 
     last_collected_uid_.store(static_cast<uint32_t>(object_uid));
     total_collected_count_.fetch_add(1);
-
-    Logger::log("[ACTION] 🧲 Mengirim paket collect UID=", object_uid, " Pos=(", px, ", ", py, ") ItemPos=(", item_x, ", ", item_y, ") [Dual-Payload]");
+    Logger::log("[ACTION]   Mengirim paket collect UID=", object_uid,
+                " PlayerPos=(", px, ", ", py, ") ItemPos=(", item_x, ", ", item_y, ")");
 }
 
 void BotActions::triggerMovementCollect(float target_x, float target_y) {
@@ -181,7 +195,6 @@ void BotActions::triggerMovementCollect(float target_x, float target_y) {
 
 bool BotActions::checkPassThroughCollect(float current_x, float current_y, float radius_tiles) {
     if (!enet_.isConnected()) return false;
-
     if (current_x == 0.0f && current_y == 0.0f) {
         int tx = 0, ty = 0;
         world_.getLocalPos(current_x, current_y, tx, ty);
@@ -193,21 +206,23 @@ bool BotActions::checkPassThroughCollect(float current_x, float current_y, float
     }
 
     float r_tiles = (radius_tiles >= 0.0f) ? radius_tiles : movement_collect_radius_.load();
-    int cur_tx = static_cast<int>(current_x / 32.0f);
-    int cur_ty = static_cast<int>(current_y / 32.0f);
+    // Gunakan titik tengah entitas (+16px) agar pembulatan tile akurat
+    int cur_tx = static_cast<int>((current_x + 16.0f) / 32.0f);
+    int cur_ty = static_cast<int>((current_y + 16.0f) / 32.0f);
+
     float max_dist = r_tiles * 32.0f;
     float max_dist_sq = max_dist * max_dist;
 
     auto now = std::chrono::steady_clock::now();
     bool collected_any = false;
     int interval_ms = pickup_delay_ms_.load();
-    if (interval_ms <= 0) interval_ms = 20;
+    if (interval_ms <= 0) interval_ms = 100;
 
     std::lock_guard<std::mutex> lock(collect_mtx_);
 
-    // Bersihkan cooldown yang sudah lebih dari 4 detik
+    // Bersihkan cooldown yang sudah lebih dari 2 detik
     for (auto it = collect_cooldowns_.begin(); it != collect_cooldowns_.end();) {
-        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second).count() > 4000) {
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second).count() > 2000) {
             collect_attempts_.erase(it->first);
             it = collect_cooldowns_.erase(it);
         } else {
@@ -216,58 +231,39 @@ bool BotActions::checkPassThroughCollect(float current_x, float current_y, float
     }
 
     for (const auto& item : dropped) {
-        int item_tx = static_cast<int>(item.x / 32.0f);
-        int item_ty = static_cast<int>(item.y / 32.0f);
+        if (!world_.canPickupItem(item.id)) continue;
+
+        int item_tx = static_cast<int>((item.x + 16.0f) / 32.0f);
+        int item_ty = static_cast<int>((item.y + 16.0f) / 32.0f);
+
         float dx = item.x - current_x;
         float dy = item.y - current_y;
         float dist_sq = dx * dx + dy * dy;
 
-        bool in_range = false;
-        if (r_tiles <= 0.0f) {
-            // Jarak 0 tile: bot harus ada di tile tersebut persis baru bisa diambil,
-            // dengan toleransi bounding box 24px untuk mengantisipasi item di perbatasan tile (misal selisih 2px)
-            in_range = (cur_tx == item_tx && cur_ty == item_ty) ||
-                       (std::abs(dx) <= 24.0f && std::abs(dy) <= 24.0f);
-        } else {
-            in_range = (dist_sq <= max_dist_sq);
-        }
+        bool same_tile = (cur_tx == item_tx && cur_ty == item_ty) ||
+                         (std::abs(dx) <= 32.0f && std::abs(dy) <= 32.0f);
+
+        bool in_range = (r_tiles <= 0.0f) ? same_tile : (same_tile || dist_sq <= max_dist_sq);
 
         if (in_range) {
-            // Cek cooldown per UID (delay interval 20ms)
             auto it = collect_cooldowns_.find(item.uid);
             int attempts = collect_attempts_[item.uid];
             if (it != collect_cooldowns_.end()) {
                 auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second).count();
-                // 20ms ultra-fast retry
-                int min_retry_delay = std::max(20, interval_ms);
+                // Gunakan jeda minimal 120ms per item agar tidak dianggap spam/flood oleh server
+                int min_retry_delay = std::max(120, interval_ms);
                 if (elapsed < min_retry_delay) continue;
             }
 
             collect_cooldowns_[item.uid] = now;
             collect_attempts_[item.uid] = attempts + 1;
 
-            // Kirim paket collect utama
             collect(static_cast<int>(item.uid), current_x, current_y, item.x, item.y);
-
-            // Adaptive Neighbor Probing:
-            // Pada GTPS tertentu atau jika drop terjadi off-screen / desync, UID di server bisa selisih 1-2.
-            // Jika percobaan awal (attempts >= 2) belum berhasil memicu Tank 14 collect dari server,
-            // lakukan probing ke UID tetangga yang berdekatan.
-            if (attempts == 2 && item.uid > 1) {
-                collect(static_cast<int>(item.uid - 1), current_x, current_y, item.x, item.y);
-            } else if (attempts == 3) {
-                collect(static_cast<int>(item.uid + 1), current_x, current_y, item.x, item.y);
-            } else if (attempts == 4 && item.uid > 2) {
-                collect(static_cast<int>(item.uid - 2), current_x, current_y, item.x, item.y);
-            } else if (attempts == 5) {
-                collect(static_cast<int>(item.uid + 2), current_x, current_y, item.x, item.y);
-            }
-
-            Logger::log("[ACTION] 🧲 [Auto-Movement] Menyerap floating item ID=", item.id, " UID=", item.uid, " (", (int)item.count, "x) di Pos=(", item.x, ", ", item.y, ")");
+            Logger::log("[ACTION]   [Auto-Movement] Menyerap floating item ID=", item.id,
+                        " UID=", item.uid, " (", (int)item.count, "x) di Pos=(", item.x, ", ", item.y, ")");
             collected_any = true;
         }
     }
-
     return collected_any;
 }
 
@@ -275,17 +271,10 @@ void BotActions::clearCollectCooldown(uint32_t uid) {
     std::lock_guard<std::mutex> lock(collect_mtx_);
     collect_cooldowns_.erase(uid);
     collect_attempts_.erase(uid);
-    if (uid > 1) {
-        collect_cooldowns_.erase(uid - 1);
-        collect_attempts_.erase(uid - 1);
-    }
-    collect_cooldowns_.erase(uid + 1);
-    collect_attempts_.erase(uid + 1);
 }
 
 bool BotActions::collectObject(uint32_t uid, float range_tiles) {
     if (!enet_.isConnected()) return false;
-
     float px = 0.0f, py = 0.0f;
     int cur_tx = 0, cur_ty = 0;
     world_.getLocalPos(px, py, cur_tx, cur_ty);
@@ -301,12 +290,10 @@ bool BotActions::collectObject(uint32_t uid, float range_tiles) {
                     return false; // Di luar jangkauan yang diminta
                 }
             }
-
             collect(static_cast<int>(uid), px, py, item.x, item.y);
             return true;
         }
     }
-
     // Direct collect UID
     collect(static_cast<int>(uid), px, py);
     return true;
@@ -314,7 +301,6 @@ bool BotActions::collectObject(uint32_t uid, float range_tiles) {
 
 int BotActions::collectByID(uint16_t item_id, float range_tiles) {
     if (!enet_.isConnected()) return 0;
-
     float px = 0.0f, py = 0.0f;
     int cur_tx = 0, cur_ty = 0;
     world_.getLocalPos(px, py, cur_tx, cur_ty);
@@ -351,12 +337,12 @@ int BotActions::collectNearby(float radius_tiles) {
         float dx = item.x - px;
         float dy = item.y - py;
         float dist_sq = dx * dx + dy * dy;
+
         if (dist_sq <= max_dist_sq) {
             collect(static_cast<int>(item.uid), px, py, item.x, item.y);
             collected++;
         }
     }
-
     return collected;
 }
 
@@ -366,7 +352,7 @@ void BotActions::drop(uint16_t item_id, int count) {
                            + std::to_string(item_id) + "|\ncount|"
                            + std::to_string(count) + "\n";
     enet_.sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT, packet_str);
-    Logger::log("[ACTION] 📦 Drop item ID=", item_id, " Jumlah=", count);
+    Logger::log("[ACTION]   Drop item ID=", item_id, " Jumlah=", count);
 }
 
 void BotActions::trash(uint16_t item_id, int count) {
@@ -375,7 +361,7 @@ void BotActions::trash(uint16_t item_id, int count) {
                            + std::to_string(item_id) + "|\ncount|"
                            + std::to_string(count) + "\n";
     enet_.sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT, packet_str);
-    Logger::log("[ACTION] 🗑️ Trash item ID=", item_id, " Jumlah=", count);
+    Logger::log("[ACTION]   Trash item ID=", item_id, " Jumlah=", count);
 }
 
 void BotActions::say(const std::string& text) {
@@ -394,7 +380,7 @@ void BotActions::say(const std::string& text) {
 
     std::string packet_str = "action|input\n|text|" + text + "\n";
     enet_.sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT, packet_str);
-    Logger::log("[ACTION] 💬 Chat: \"", text, "\"");
+    Logger::log("[ACTION]   Chat: \"", text, "\"");
 }
 
 void BotActions::warp(const std::string& world_name) {
@@ -402,13 +388,13 @@ void BotActions::warp(const std::string& world_name) {
     std::string packet_str = "action|join_request\nname|" + world_name + "\ninvitedWorld|0\n";
     enet_.sendText(GtPacket::NET_MESSAGE_GAME_MESSAGE, packet_str);
     enet_.sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT, packet_str);
-    Logger::log("[ACTION] 🚀 Warp ke world: ", world_name);
+    Logger::log("[ACTION]   Warp ke world: ", world_name);
 }
 
 void BotActions::respawn() {
     if (!enet_.isConnected()) return;
     enet_.sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT, "action|respawn\n");
-    Logger::log("[ACTION] 🔄 Respawn dikirim ke server");
+    Logger::log("[ACTION]   Respawn dikirim ke server");
 }
 
 void BotActions::requestTileChange(int tile_x, int tile_y, uint16_t item_id) {
@@ -419,7 +405,7 @@ void BotActions::requestTileChange(int tile_x, int tile_y, uint16_t item_id) {
 
     auto pkt = TankPacketHelper::createTileChange(world_.getLocalNetId(), tile_x, tile_y, item_id, px, py);
     sendTankPacket(pkt);
-    Logger::log("[ACTION] 🔨 RequestTileChange item=", item_id, " pada tile (", tile_x, ", ", tile_y, ")");
+    Logger::log("[ACTION]   RequestTileChange item=", item_id, " pada tile (", tile_x, ", ", tile_y, ")");
 }
 
 void BotActions::handleTouch(float x, float y, uint16_t item_id) {
@@ -432,14 +418,13 @@ void BotActions::handleTouch(float x, float y, uint16_t item_id) {
         tx = static_cast<int>(x);
         ty = static_cast<int>(y);
     }
-
     uint16_t use_item = (item_id != 0) ? item_id : selected_item_.load();
     requestTileChange(tx, ty, use_item);
 }
 
 void BotActions::setModFly(bool enable) {
     mod_fly_ = enable;
-    Logger::log("[ACTION] 🕊️ ModFly: ", enable ? "ENABLED" : "DISABLED");
+    Logger::log("[ACTION]   ModFly: ", enable ? "ENABLED" : "DISABLED");
 }
 
 bool BotActions::isModFly() const {
@@ -448,7 +433,7 @@ bool BotActions::isModFly() const {
 
 void BotActions::setNoName(bool enable) {
     no_name_ = enable;
-    Logger::log("[ACTION] 👤 NoName: ", enable ? "ENABLED" : "DISABLED");
+    Logger::log("[ACTION]   NoName: ", enable ? "ENABLED" : "DISABLED");
 }
 
 bool BotActions::isNoName() const {
@@ -481,7 +466,7 @@ int BotActions::getBuildRange() const {
 
 void BotActions::setItemSelected(uint16_t item_id) {
     selected_item_ = item_id;
-    Logger::log("[ACTION] 🎒 Item Selected: ID=", item_id);
+    Logger::log("[ACTION]   Item Selected: ID=", item_id);
 }
 
 uint16_t BotActions::getItemSelected() const {
@@ -503,11 +488,9 @@ bool AutoFarmController::start(uint16_t item_id, int tile_x, int tile_y, int del
     if (running_.exchange(true)) {
         return false; // sudah jalan
     }
-
     if (worker_.joinable()) {
         worker_.join();
     }
-
     worker_ = std::thread(&AutoFarmController::farmLoop, this, item_id, tile_x, tile_y, delay_ms, hits_per_block);
     return true;
 }
@@ -525,14 +508,14 @@ bool AutoFarmController::isRunning() const {
 }
 
 void AutoFarmController::farmLoop(uint16_t item_id, int tile_x, int tile_y, int delay_ms, int hits_per_block) {
-    Logger::log("[AUTOFARM] 🚜 Auto-Farm DIMULAI untuk Item ID=", item_id, " pada Tile (", tile_x, ", ", tile_y, ")");
+    Logger::log("[AUTOFARM]   Auto-Farm DIMULAI untuk Item ID=", item_id, " pada Tile (", tile_x, ", ", tile_y, ")");
 
     int loop_count = 0;
     while (running_) {
         // Cek stok item di inventory
         int count = world_.getItemCount(item_id);
         if (count <= 0) {
-            Logger::log("[AUTOFARM] ⚠️ Stok item ID=", item_id, " habis di inventory! Menunggu item terkumpul...");
+            Logger::log("[AUTOFARM]   Stok item ID=", item_id, " habis di inventory! Menunggu item terkumpul...");
             // Coba ambil drop di sekitar
             actions_.collectNearby(3.0f);
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
@@ -542,6 +525,7 @@ void AutoFarmController::farmLoop(uint16_t item_id, int tile_x, int tile_y, int 
         // 1. Pasang blok
         actions_.place(item_id, tile_x, tile_y);
         AntiDetection::sleepWithJitter(delay_ms, std::max(5, (int)(delay_ms * 0.15f)));
+
         if (!running_) break;
 
         // 2. Pukul blok sampai hancur
@@ -549,20 +533,22 @@ void AutoFarmController::farmLoop(uint16_t item_id, int tile_x, int tile_y, int 
             actions_.hit(tile_x, tile_y);
             AntiDetection::sleepWithJitter(delay_ms, std::max(5, (int)(delay_ms * 0.15f)));
         }
+
         if (!running_) break;
 
         // 3. Ambil drop hasil panen
         actions_.collectNearby(3.0f);
         AntiDetection::sleepWithJitter(delay_ms, std::max(5, (int)(delay_ms * 0.15f)));
+
         AntiDetection::maybeHumanPause(0.03f, 150, 350);
 
         loop_count++;
         if (loop_count % 10 == 0) {
-            Logger::log("[AUTOFARM] 🌾 Siklus panen ke-", loop_count, " selesai. Sisa stok: ", world_.getItemCount(item_id));
+            Logger::log("[AUTOFARM]   Siklus panen ke-", loop_count, " selesai. Sisa stok: ", world_.getItemCount(item_id));
         }
     }
 
-    Logger::log("[AUTOFARM] 🛑 Auto-Farm BERHENTI.");
+    Logger::log("[AUTOFARM]   Auto-Farm BERHENTI.");
 }
 
 // ============================================================
@@ -618,7 +604,7 @@ void AutoCollectController::passiveProximityWorker() {
                 }
             }
         }
-        int tick_delay = std::max(10, actions_.getPickupDelay());
+        int tick_delay = std::max(100, actions_.getPickupDelay());
         std::this_thread::sleep_for(std::chrono::milliseconds(tick_delay));
     }
 }
@@ -627,14 +613,11 @@ bool AutoCollectController::start(uint16_t filter_item_id, int delay_ms, float m
     if (running_.exchange(true)) {
         return false; // sudah berjalan
     }
-
     if (worker_.joinable()) {
         worker_.join();
     }
-
     filter_item_id_.store(filter_item_id);
     delay_ms_.store(delay_ms > 0 ? delay_ms : 600);
-
     worker_ = std::thread(&AutoCollectController::collectLoop, this, filter_item_id, delay_ms, max_range_tiles);
     return true;
 }
@@ -662,8 +645,7 @@ bool AutoCollectController::triggerPassThroughCollect(float current_x, float cur
 }
 
 void AutoCollectController::collectLoop(uint16_t filter_item_id, int delay_ms, float max_range_tiles) {
-    Logger::log("[AUTOCOLLECT] 🧲 Active Sweeper DIMULAI (Filter ID=", filter_item_id, ", Delay=", delay_ms, "ms)");
-
+    Logger::log("[AUTOCOLLECT]   Active Sweeper DIMULAI (Filter ID=", filter_item_id, ", Delay=", delay_ms, "ms)");
     {
         std::lock_guard<std::mutex> lock(retry_mtx_);
         retry_counts_.clear();
@@ -701,21 +683,16 @@ void AutoCollectController::collectLoop(uint16_t filter_item_id, int delay_ms, f
         float best_dist_sq = 1e9f;
 
         for (const auto& item : dropped) {
-            // Filter ID (jika > 0, hanya ambil ID tersebut)
             if (filter_item_id > 0 && item.id != filter_item_id) {
                 continue;
             }
-
-            // Cek apakah item bisa diambil ke inventaris (atau Gems 112)
             if (!world_.canPickupItem(item.id)) {
-                continue; // Tas penuh dan bukan gems, lewati
+                continue;
             }
-
-            // Cek retry count (jika gagal >= 3 kali berturut-turut, lewati sementara)
             {
                 std::lock_guard<std::mutex> lock(retry_mtx_);
                 auto it = retry_counts_.find(item.uid);
-                if (it != retry_counts_.end() && it->second >= 3) {
+                if (it != retry_counts_.end() && it->second >= 5) {
                     continue;
                 }
             }
@@ -740,15 +717,24 @@ void AutoCollectController::collectLoop(uint16_t filter_item_id, int delay_ms, f
             continue;
         }
 
-        int target_tx = static_cast<int>(best_item->x / 32.0f);
-        int target_ty = static_cast<int>(best_item->y / 32.0f);
+        int target_tx = static_cast<int>((best_item->x + 16.0f) / 32.0f);
+        int target_ty = static_cast<int>((best_item->y + 16.0f) / 32.0f);
 
-        // Jika belum berada di tile item, jalan mendekat menggunakan pathfinding
+        // Jika belum berada di tile item, jalan mendekat selangkah demi selangkah
         if (ptx != target_tx || pty != target_ty) {
             bool can_fly = actions_.isModFly();
             auto waypoints = world_.findPath(ptx, pty, target_tx, target_ty, can_fly);
             if (waypoints.empty()) {
-                actions_.moveTo(target_tx, target_ty);
+                // Jalan bertahap 1 tile per langkah agar sinkron (tidak detach di background)
+                int cx = ptx, cy = pty;
+                while ((cx != target_tx || cy != target_ty) && running_) {
+                    if (cx < target_tx) cx++;
+                    else if (cx > target_tx) cx--;
+                    if (cy < target_ty) cy++;
+                    else if (cy > target_ty) cy--;
+                    actions_.moveTo(cx, cy);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(actions_.getSpeed()));
+                }
             } else {
                 for (const auto& wp : waypoints) {
                     if (!running_) break;
@@ -761,24 +747,19 @@ void AutoCollectController::collectLoop(uint16_t filter_item_id, int delay_ms, f
 
         if (!running_) break;
 
-        // Ambil item: bot harus berada di tile tersebut persis baru diambil
         float cur_px = 0.0f, cur_py = 0.0f;
         int cur_tx = 0, cur_ty = 0;
         world_.getLocalPos(cur_px, cur_py, cur_tx, cur_ty);
+        float dx = best_item->x - cur_px;
+        float dy = best_item->y - cur_py;
 
-        if (cur_tx == target_tx && cur_ty == target_ty) {
-            int retries = 0;
+        if ((cur_tx == target_tx && cur_ty == target_ty) || (dx * dx + dy * dy <= (48.0f * 48.0f))) {
             {
                 std::lock_guard<std::mutex> lock(retry_mtx_);
-                retries = retry_counts_[best_item->uid]++;
+                retry_counts_[best_item->uid]++;
             }
-
+            actions_.clearCollectCooldown(best_item->uid);
             actions_.collect(static_cast<int>(best_item->uid), cur_px, cur_py, best_item->x, best_item->y);
-            if (retries == 1 && best_item->uid > 1) {
-                actions_.collect(static_cast<int>(best_item->uid - 1), cur_px, cur_py, best_item->x, best_item->y);
-            } else if (retries >= 2) {
-                actions_.collect(static_cast<int>(best_item->uid + 1), cur_px, cur_py, best_item->x, best_item->y);
-            }
             recordCollected(best_item->uid);
 
             int d = delay_ms_.load();
@@ -790,6 +771,5 @@ void AutoCollectController::collectLoop(uint16_t filter_item_id, int delay_ms, f
         }
     }
 
-    Logger::log("[AUTOCOLLECT] 🛑 Active Sweeper BERHENTI.");
+    Logger::log("[AUTOCOLLECT]   Active Sweeper BERHENTI.");
 }
-

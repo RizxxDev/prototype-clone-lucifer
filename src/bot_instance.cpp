@@ -8,6 +8,7 @@
 #include <chrono>
 #include <thread>
 #include <deque>
+#include <cmath>
 
 BotInstance::BotInstance(int id,
                          const std::string& account_name,
@@ -29,6 +30,7 @@ BotInstance::BotInstance(int id,
     autofarm_ = std::make_unique<AutoFarmController>(*actions_, *world_);
     autocollect_ = std::make_unique<AutoCollectController>(*actions_, *world_);
     lua_engine_ = std::make_unique<LuaEngine>(*actions_, *world_, *enet_);
+
     lua_engine_->setProxyCallbacks(
         [this]() { return proxy_; },
         [this](const Socks5Config& p) { proxy_ = p; }
@@ -109,7 +111,6 @@ void BotInstance::addConsoleMessage(ConsoleMsgType type, const std::string& msg)
     {
         std::lock_guard<std::mutex> lock(console_mtx_);
         console_entries_.push_back(std::move(entry));
-        // Batasi dengan pop_front O(1) alih-alih erase O(N)
         while (console_entries_.size() > 500) {
             console_entries_.pop_front();
         }
@@ -118,7 +119,6 @@ void BotInstance::addConsoleMessage(ConsoleMsgType type, const std::string& msg)
 }
 
 const std::vector<ConsoleEntry>& BotInstance::getConsoleSnapshot() {
-    // Hanya rebuild snapshot jika ada pesan baru (dirty flag)
     if (console_dirty_.load(std::memory_order_acquire)) {
         std::lock_guard<std::mutex> lock(console_mtx_);
         console_snapshot_.assign(console_entries_.begin(), console_entries_.end());
@@ -175,7 +175,7 @@ void BotInstance::refreshPublicIpAsync() {
                     std::lock_guard<std::mutex> lock(ip_mtx_);
                     detected_ip_ = ip;
                 }
-                Logger::log("[BOT #", id, "] 🌐 IP publik aktif terdeteksi: ", ip);
+                Logger::log("[BOT #", id, "]   IP publik aktif terdeteksi: ", ip);
             }
         }
     }).detach();
@@ -198,6 +198,7 @@ std::string BotInstance::buildHandshake(const std::string& meta_str, int user_id
     } else {
         hs += "f|0\n";
     }
+
     hs += "requestedName|" + (account_name_.empty() ? "GuestBot" : account_name_) + "\n";
     hs += "protocol|" + std::to_string(protocol) + "\n";
     hs += "game_version|" + version + "\n";
@@ -205,10 +206,12 @@ std::string BotInstance::buildHandshake(const std::string& meta_str, int user_id
     hs += "player_age|20\n";
     hs += "GDPR|1\n";
     hs += fingerprint_.toHandshakeString(meta_str);
+
     if (user_id > 0) hs += "user|" + std::to_string(user_id) + "\n";
     if (token > 0) hs += "token|" + std::to_string(token) + "\n";
     if (!door_id.empty()) hs += "doorID|" + door_id + "\n";
     if (lmode >= 0) hs += "lmode|" + std::to_string(lmode) + "\n";
+
     return hs;
 }
 
@@ -224,10 +227,8 @@ bool BotInstance::start() {
         std::lock_guard<std::mutex> lock(status_mtx_);
         status_string_ = "HTTP Login...";
     }
-
     addConsoleMessage(ConsoleMsgType::System, "Getting Server Address...");
-
-    Logger::log("[BOT #", id_, " | ", account_name_, "] 🚀 Memulai koneksi bot",
+    Logger::log("[BOT #", id_, " | ", account_name_, "]   Memulai koneksi bot",
                 (proxy_.isValid() ? (" via SOCKS5 " + proxy_.toString()) : " (Direct)"), "...");
 
     refreshPublicIpAsync();
@@ -252,7 +253,7 @@ bool BotInstance::start() {
             } else {
                 Logger::log("[BOT #", id_, "] HTTP Login peringatan: ", login_resp.error);
                 if (!cached_server_ip_.empty() && cached_server_port_ > 0) {
-                    Logger::log("[BOT #", id_, "] 🔄 Menggunakan cache server GTPS: ", cached_server_ip_, ":", cached_server_port_);
+                    Logger::log("[BOT #", id_, "]   Menggunakan cache server GTPS: ", cached_server_ip_, ":", cached_server_port_);
                     game_host = cached_server_ip_;
                     game_port = cached_server_port_;
                 }
@@ -260,7 +261,7 @@ bool BotInstance::start() {
         } catch (const std::exception& e) {
             Logger::log("[BOT #", id_, "] HTTP Login exception: ", e.what());
             if (!cached_server_ip_.empty() && cached_server_port_ > 0) {
-                Logger::log("[BOT #", id_, "] 🔄 Menggunakan cache server GTPS: ", cached_server_ip_, ":", cached_server_port_);
+                Logger::log("[BOT #", id_, "]   Menggunakan cache server GTPS: ", cached_server_ip_, ":", cached_server_port_);
                 game_host = cached_server_ip_;
                 game_port = cached_server_port_;
             }
@@ -279,7 +280,7 @@ bool BotInstance::start() {
 
     // 2. Terowongan SOCKS5 UDP jika dikonfigurasi
     if (proxy_.isValid()) {
-        Logger::log("[BOT #", id_, "] 🛡️ Menginisialisasi SOCKS5 UDP Tunnel (", proxy_.toString(), ")...");
+        Logger::log("[BOT #", id_, "]   Menginisialisasi SOCKS5 UDP Tunnel (", proxy_.toString(), ")...");
         if (!proxy_tunnel_) {
             proxy_tunnel_ = std::make_unique<Socks5UdpTunnel>();
         }
@@ -287,15 +288,15 @@ bool BotInstance::start() {
         if (proxy_tunnel_->start(proxy_, game_host, static_cast<uint16_t>(game_port), terr)) {
             connect_host = proxy_tunnel_->getLocalHost();
             connect_port = proxy_tunnel_->getLocalPort();
-            Logger::log("[BOT #", id_, "] ✅ SOCKS5 UDP Tunnel aktif (Full TCP+UDP): 127.0.0.1:", connect_port, " -> ", game_host, ":", game_port);
+            Logger::log("[BOT #", id_, "]   SOCKS5 UDP Tunnel aktif (Full TCP+UDP): 127.0.0.1:", connect_port, " -> ", game_host, ":", game_port);
         } else {
-            Logger::log("[BOT #", id_, "] ⚠️ SOCKS5 UDP Tunnel tidak aktif: ", terr);
+            Logger::log("[BOT #", id_, "]   SOCKS5 UDP Tunnel tidak aktif: ", terr);
             if (proxy_.udp_fallback_direct) {
-                Logger::log("[BOT #", id_, "] 🌐 Mengaktifkan Mode Hybrid: HTTP Login & Web Auth via SOCKS5 Proxy, Game via Direct UDP.");
+                Logger::log("[BOT #", id_, "]   Mengaktifkan Mode Hybrid: HTTP Login & Web Auth via SOCKS5 Proxy, Game via Direct UDP.");
                 connect_host = game_host;
                 connect_port = game_port;
             } else {
-                Logger::log("[BOT #", id_, "] ❌ Gagal mengaktifkan SOCKS5 UDP Tunnel: ", terr);
+                Logger::log("[BOT #", id_, "]   Gagal mengaktifkan SOCKS5 UDP Tunnel: ", terr);
                 {
                     std::lock_guard<std::mutex> lock(status_mtx_);
                     status_string_ = "Proxy Error";
@@ -313,12 +314,12 @@ bool BotInstance::start() {
 
     if (enet_->connect(connect_host, connect_port, 5000)) {
         addConsoleMessage(ConsoleMsgType::System, "Located server, connecting...");
-        Logger::log("[BOT #", id_, "] ✅ ENet terhubung ke ", game_host, ":", game_port,
+        Logger::log("[BOT #", id_, "]   ENet terhubung ke ", game_host, ":", game_port,
                     (proxy_.isValid() ? (" via " + proxy_.toString()) : " (Direct)"));
         return true;
     } else {
         addConsoleMessage(ConsoleMsgType::System, "Failed to connect to server.");
-        Logger::log("[BOT #", id_, "] ❌ Gagal terhubung ke ", game_host, ":", game_port);
+        Logger::log("[BOT #", id_, "]   Gagal terhubung ke ", game_host, ":", game_port);
         reconnect_ctrl_.onDisconnected("Gagal terhubung ke host server");
         {
             std::lock_guard<std::mutex> lock(status_mtx_);
@@ -338,16 +339,14 @@ void BotInstance::stop() {
     if (proxy_tunnel_) {
         proxy_tunnel_->stop();
     }
-
     bool was_offline = false;
     {
         std::lock_guard<std::mutex> lock(status_mtx_);
         was_offline = (status_string_ == "Offline");
         status_string_ = "Offline";
     }
-
     if (was_active || was_in_world || !was_offline) {
-        Logger::log("[BOT #", id_, " | ", account_name_, "] 🛑 Bot dihentikan.");
+        Logger::log("[BOT #", id_, " | ", account_name_, "]   Bot dihentikan.");
     }
     stats_.stopSession();
     stats_.saveToFile(account_name_);
@@ -356,7 +355,7 @@ void BotInstance::stop() {
 void BotInstance::doReconnect() {
     if (!active_ || redirecting_.load()) return;
 
-    Logger::log("[BOT #", id_, " | ", account_name_, "] 🔄 Menjalankan Auto-Reconnect...");
+    Logger::log("[BOT #", id_, " | ", account_name_, "]   Menjalankan Auto-Reconnect...");
     addConsoleMessage(ConsoleMsgType::System, "Reconnecting...");
     enet_->disconnect();
     world_->clearWorld();
@@ -382,7 +381,7 @@ void BotInstance::doReconnect() {
                 if (!retry_login.token.empty()) cached_token_ = retry_login.token;
             } else {
                 if (!cached_server_ip_.empty() && cached_server_port_ > 0) {
-                    Logger::log("[BOT #", id_, "] 🔄 HTTP server_data timeout, memakai cache server: ", cached_server_ip_, ":", cached_server_port_);
+                    Logger::log("[BOT #", id_, "]   HTTP server_data timeout, memakai cache server: ", cached_server_ip_, ":", cached_server_port_);
                     game_host = cached_server_ip_;
                     game_port = cached_server_port_;
                 }
@@ -407,9 +406,9 @@ void BotInstance::doReconnect() {
             connect_host = proxy_tunnel_->getLocalHost();
             connect_port = proxy_tunnel_->getLocalPort();
         } else {
-            Logger::log("[BOT #", id_, "] ⚠️ Reconnect SOCKS5 UDP Tunnel tidak aktif: ", terr);
+            Logger::log("[BOT #", id_, "]   Reconnect SOCKS5 UDP Tunnel tidak aktif: ", terr);
             if (proxy_.udp_fallback_direct) {
-                Logger::log("[BOT #", id_, "] 🌐 Menggunakan Mode Hybrid (Game via Direct UDP)...");
+                Logger::log("[BOT #", id_, "]   Menggunakan Mode Hybrid (Game via Direct UDP)...");
                 connect_host = game_host;
                 connect_port = game_port;
             } else {
@@ -420,13 +419,13 @@ void BotInstance::doReconnect() {
     }
 
     if (enet_->connect(connect_host, connect_port, 5000)) {
-        Logger::log("[BOT #", id_, "] ✅ Reconnect ENet berhasil.");
+        Logger::log("[BOT #", id_, "]   Reconnect ENet berhasil.");
         {
             std::lock_guard<std::mutex> lock(status_mtx_);
             status_string_ = "Handshaking...";
         }
     } else {
-        Logger::log("[BOT #", id_, "] ❌ Reconnect ENet gagal.");
+        Logger::log("[BOT #", id_, "]   Reconnect ENet gagal.");
         reconnect_ctrl_.onDisconnected("Gagal connect ENet host");
         {
             std::lock_guard<std::mutex> lock(status_mtx_);
@@ -473,17 +472,16 @@ void BotInstance::poll() {
 void BotInstance::setupPacketHandlers() {
     auto warp_to_target = [this]() {
         if (!target_world_.empty() && !in_world_.load() && !warped_to_target_.exchange(true)) {
-            Logger::log("[BOT #", id_, "] 🚀 Mengirim warp ke target world: ", target_world_);
+            Logger::log("[BOT #", id_, "]   Mengirim warp ke target world: ", target_world_);
             actions_->warp(target_world_);
         }
     };
 
     auto trigger_enter = [this]() {
         if (!auto_warped_.exchange(true)) {
-            Logger::log("[BOT #", id_, "] ✅ Login terautentikasi! Mengirim enter_game...");
+            Logger::log("[BOT #", id_, "]   Login terautentikasi! Mengirim enter_game...");
             enet_->sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT, "action|enter_game\n");
             enet_->sendText(GtPacket::NET_MESSAGE_GAME_MESSAGE, "action|enter_game\n");
-
             if (!target_world_.empty()) {
                 std::thread([this]() {
                     std::this_thread::sleep_for(std::chrono::milliseconds(1200));
@@ -502,7 +500,7 @@ void BotInstance::setupPacketHandlers() {
         if (active_ && !redirecting_.load()) {
             in_world_ = false;
             reconnect_ctrl_.onDisconnected("Koneksi ENet terputus");
-            Logger::log("[BOT #", id_, "] 🔌 Terputus dari server. Auto-reconnect aktif.");
+            Logger::log("[BOT #", id_, "]   Terputus dari server. Auto-reconnect aktif.");
         }
     });
 
@@ -523,7 +521,6 @@ void BotInstance::setupPacketHandlers() {
             if (stats_.parseFromText(clean)) {
                 stats_.saveToFile(account_name_);
             }
-
             if (text.find("action|play_sfx") == std::string::npos &&
                 text.find("action|ping") == std::string::npos &&
                 text.find("add_label") == std::string::npos &&
@@ -531,7 +528,7 @@ void BotInstance::setupPacketHandlers() {
                 text.find("add_spacer") == std::string::npos) {
                 while (!clean.empty() && (clean.back() == '\r' || clean.back() == '\n' || clean.back() == ' ')) clean.pop_back();
                 if (!clean.empty() && clean.size() < 120) {
-                    Logger::log("[BOT #", id_, "] 💬 ", clean);
+                    Logger::log("[BOT #", id_, "]   ", clean);
                 }
             }
 
@@ -549,6 +546,7 @@ void BotInstance::setupPacketHandlers() {
                 std::memcpy(&tank_update, pkt.payload.data(), sizeof(GameUpdatePacket));
                 lua_engine_->triggerOnProcessTankUpdate(tank_update);
             }
+
             uint8_t tank_type = pkt.payload.size() > 0 ? pkt.payload[0] : 0;
 
             // Tank 0: Posisi
@@ -556,6 +554,7 @@ void BotInstance::setupPacketHandlers() {
                 GameUpdatePacket state_pkt;
                 std::memcpy(&state_pkt, pkt.payload.data(), sizeof(GameUpdatePacket));
                 world_->updatePlayerPos(state_pkt.net_id, state_pkt.pos_x, state_pkt.pos_y);
+
                 if (state_pkt.net_id == world_->getLocalNetId() && autocollect_) {
                     autocollect_->triggerPassThroughCollect(state_pkt.pos_x, state_pkt.pos_y);
                 }
@@ -570,7 +569,7 @@ void BotInstance::setupPacketHandlers() {
                                          pkt.payload.size() - sizeof(GameUpdatePacket));
                 }
                 world_->setWorldName(target_world_);
-                Logger::log("[BOT #", id_, "] 🌍 Map data diterima! Bot berada di world: ", target_world_);
+                Logger::log("[BOT #", id_, "]   Map data diterima! Bot berada di world: ", target_world_);
 
                 // Periksa apakah sudah ada floating item di dekat posisi bot saat spawn
                 float bx = 0.0f, by = 0.0f;
@@ -579,9 +578,8 @@ void BotInstance::setupPacketHandlers() {
                 if (autocollect_) autocollect_->triggerPassThroughCollect(bx, by);
                 else actions_->checkPassThroughCollect(bx, by);
             }
-            // Tank 14 & Tank 8 (Alternate GTPS Object Event): Dropped Item Event (Spawn / Collect)
-            else if (((tank_type == PACKET_ITEM_CHANGE_OBJECT || tank_type == 14) || 
-                      (tank_type == 8 && (pkt.payload.size() >= sizeof(GameUpdatePacket)))) && 
+            // Tank 14 (PACKET_ITEM_CHANGE_OBJECT): Dropped Item Event (Spawn / Merge / Collect)
+            else if ((tank_type == PACKET_ITEM_CHANGE_OBJECT || tank_type == 14) &&
                      pkt.payload.size() >= sizeof(GameUpdatePacket)) {
                 GameUpdatePacket item_pkt;
                 std::memcpy(&item_pkt, pkt.payload.data(), sizeof(GameUpdatePacket));
@@ -596,104 +594,82 @@ void BotInstance::setupPacketHandlers() {
                             " pos=(", item_pkt.pos_x, ", ", item_pkt.pos_y, ")",
                             " count1=", (int)item_pkt.count1);
 
-                // GTPS Item Lifecycle:
-                // 1. Spawning / Dropped on ground: pos_x > 0 || pos_y > 0 || count1 > 0 (memiliki koordinat fisik di world)
-                // 2. Collected / Despawned: pos_x == 0 && pos_y == 0 (diambil oleh player atau dihapus dari world)
-                bool is_on_ground = (item_pkt.pos_x > 0.0f || item_pkt.pos_y > 0.0f || item_pkt.count1 > 0);
+                // 1. Item Collected / Despawned:
+                // Pada Growtopia, ketika item diambil oleh player (net_id >= 0 dan target_net_id == -1)
+                // atau ketika pos_x == 0 && pos_y == 0 && count1 == 0
+                bool is_collected = (item_pkt.pos_x == 0.0f && item_pkt.pos_y == 0.0f && item_pkt.count1 == 0) ||
+                                    (item_pkt.net_id >= 0 && item_pkt.target_net_id == -1 && item_pkt.pos_x == 0.0f);
 
-                if (!is_on_ground) {
-                    // Item terambil atau hilang dari world (posisi 0, 0)
+                if (is_collected) {
                     uint32_t collected_uid = static_cast<uint32_t>(
-                        item_pkt.main_data > 0 ? item_pkt.main_data : 
+                        item_pkt.main_data > 0 ? item_pkt.main_data :
                         (item_pkt.target_net_id > 0 ? item_pkt.target_net_id : 0)
                     );
                     if (collected_uid > 0) {
-                        world_->setLastDroppedUid(collected_uid);
+                        // JANGAN panggil world_->setLastDroppedUid(collected_uid) karena akan merusak urutan UID!
                         world_->removeDroppedItem(collected_uid);
                         if (actions_) {
                             actions_->clearCollectCooldown(collected_uid);
                         }
                     }
-                    // Jika yang mengambil adalah bot lokal kita, bersihkan juga item di dekat posisi bot (toleransi 96px)
-                    // untuk mengantisipasi jika item di world disimpan dengan UID desync
-                    if (item_pkt.net_id == world_->getLocalNetId()) {
-                        float bx = 0.0f, by = 0.0f;
-                        int btx = 0, bty = 0;
-                        world_->getLocalPos(bx, by, btx, bty);
-                        if (bx > 0.0f || by > 0.0f) {
-                            world_->removeDroppedItemByPos(bx, by, 96.0f);
-                        }
+                    Logger::log("[BOT #", id_, "]   Dropped Item terambil/hilang: UID=", collected_uid, " CollectorNetID=", item_pkt.net_id);
+                }
+                // 2. Item Stack Modified / Merged on Ground (net_id == -3):
+                else if (item_pkt.net_id == -3) {
+                    uint16_t item_id = static_cast<uint16_t>(item_pkt.main_data > 0 ? item_pkt.main_data : 0);
+                    uint8_t count = item_pkt.float_var > 0.0f ? static_cast<uint8_t>(item_pkt.float_var) : (item_pkt.count1 > 0 ? item_pkt.count1 : 1);
+                    uint32_t target_uid = static_cast<uint32_t>(item_pkt.target_net_id > 0 ? item_pkt.target_net_id : item_pkt.int_x);
+                    if (target_uid > 0) {
+                        world_->addOrUpdateDroppedItem(target_uid, item_id, count, item_pkt.pos_x, item_pkt.pos_y);
                     }
-                    Logger::log("[BOT #", id_, "] 💨 Dropped Item terambil/hilang: UID=", collected_uid, " CollectorNetID=", item_pkt.net_id);
-                } else {
-                    // Item baru jatuh atau ada di lantai world
+                }
+                // 3. Item Baru Jatuh / Spawned di Tanah (net_id == -1):
+                else {
                     uint16_t item_id = static_cast<uint16_t>(item_pkt.main_data > 0 ? item_pkt.main_data : 0);
                     uint8_t count = item_pkt.float_var > 0.0f ? static_cast<uint8_t>(item_pkt.float_var) : (item_pkt.count1 > 0 ? item_pkt.count1 : 1);
 
-                    int dropper_net = item_pkt.target_net_id;
-                    bool is_player_netid = false;
-                    if (dropper_net > 0) {
-                        if (dropper_net == world_->getLocalNetId()) {
-                            is_player_netid = true;
-                        } else {
-                            auto players = world_->getPlayers();
-                            for (const auto& p : players) {
-                                if (p.net_id == dropper_net) {
-                                    is_player_netid = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
                     uint32_t uid = 0;
-                    uint32_t last_uid = world_->getLastDroppedUid();
-
-                    // Heuristik Resolusi UID:
-                    // 1. Jika target_net_id > last_uid dan BUKAN player NetID, server mungkin mengirim UID eksplisit
-                    if (dropper_net > 0 && !is_player_netid && static_cast<uint32_t>(dropper_net) > last_uid) {
-                        uid = static_cast<uint32_t>(dropper_net);
+                    if (item_pkt.int_x > 0 && item_pkt.net_id == -1) {
+                        uid = static_cast<uint32_t>(item_pkt.int_x);
                         world_->setLastDroppedUid(uid);
                     } else {
-                        // 2. Standar Growtopia / CPS: target_net_id adalah dropper NetID, server mengalokasikan UID sekuensial (++last_uid)
                         uid = world_->allocateNextDroppedUid();
                     }
 
                     world_->addOrUpdateDroppedItem(uid, item_id, count, item_pkt.pos_x, item_pkt.pos_y);
-                    Logger::log("[SCANNER] 📦 Inbound Drop Packet Type=", (int)tank_type, 
-                                " AssignedUID=", uid, " (LastUID=", world_->getLastDroppedUid(), 
-                                ") ID=", item_id, " Count=", (int)count, 
-                                " DropperNetID=", dropper_net,
+
+                    Logger::log("[SCANNER]   Inbound Drop Packet Type=", (int)tank_type,
+                                " AssignedUID=", uid, " (LastUID=", world_->getLastDroppedUid(),
+                                ") ID=", item_id, " Count=", (int)count,
                                 " Pos=(", item_pkt.pos_x, ", ", item_pkt.pos_y, ")");
 
                     // Auto-collect jika item jatuh di tile bot (atau dalam radius jika diatur > 0)
                     float bx = 0.0f, by = 0.0f;
                     int btx = 0, bty = 0;
                     world_->getLocalPos(bx, by, btx, bty);
-                    int item_tx = static_cast<int>(item_pkt.pos_x / 32.0f);
-                    int item_ty = static_cast<int>(item_pkt.pos_y / 32.0f);
+
+                    int bot_tx = static_cast<int>((bx + 16.0f) / 32.0f);
+                    int bot_ty = static_cast<int>((by + 16.0f) / 32.0f);
+                    int item_tx = static_cast<int>((item_pkt.pos_x + 16.0f) / 32.0f);
+                    int item_ty = static_cast<int>((item_pkt.pos_y + 16.0f) / 32.0f);
 
                     float rad = actions_ ? actions_->getMovementCollectRadius() : 0.0f;
                     float dx = item_pkt.pos_x - bx;
                     float dy = item_pkt.pos_y - by;
+
                     bool should_collect = false;
                     if (rad <= 0.0f) {
-                        should_collect = (btx == item_tx && bty == item_ty) ||
-                                         (std::abs(dx) <= 24.0f && std::abs(dy) <= 24.0f);
+                        should_collect = (bot_tx == item_tx && bot_ty == item_ty) ||
+                                         (std::abs(dx) <= 32.0f && std::abs(dy) <= 32.0f);
                     } else {
                         float max_px = rad * 32.0f;
                         should_collect = (dx * dx + dy * dy <= (max_px * max_px));
                     }
 
-                    if (should_collect) {
-                        if (actions_) {
-                            actions_->collect(static_cast<int>(uid), bx, by, item_pkt.pos_x, item_pkt.pos_y);
-                        }
+                    if (should_collect && actions_) {
+                        actions_->collect(static_cast<int>(uid), bx, by, item_pkt.pos_x, item_pkt.pos_y);
                         if (autocollect_) {
                             autocollect_->recordCollected(uid);
-                            autocollect_->triggerPassThroughCollect(bx, by);
-                        } else if (actions_) {
-                            actions_->checkPassThroughCollect(bx, by);
                         }
                     }
                 }
@@ -709,14 +685,13 @@ void BotInstance::setupPacketHandlers() {
                     stats_.gems = inv_gems;
                     stats_.saveToFile(account_name_);
                 }
-                Logger::log("[BOT #", id_, "] 🎒 Inventory dimuat.");
+                Logger::log("[BOT #", id_, "]   Inventory dimuat.");
                 warp_to_target();
             }
             // Tank 1: Call Function
             else if (tank_type == PACKET_CALL_FUNCTION && pkt.payload.size() >= sizeof(GameUpdatePacket)) {
                 GameUpdatePacket call_pkt{};
                 std::memcpy(&call_pkt, pkt.payload.data(), sizeof(GameUpdatePacket));
-
                 auto vars = parseVariantList(pkt.payload.data() + sizeof(GameUpdatePacket),
                                              pkt.payload.size() - sizeof(GameUpdatePacket));
                 if (!vars.empty()) {
@@ -726,8 +701,8 @@ void BotInstance::setupPacketHandlers() {
 
                     std::string fn = vars[0].str_val;
                     if (fn != "OnSetPos" && fn != "OnSetBumperCoinValues") {
-                        Logger::log("[BOT #", id_, "] 📩 Server Call: '", fn, "' (vars=", vars.size(), 
-                                    (vars.size() > 1 && vars[1].type == 2 ? (" arg1='" + vars[1].str_val + "'") : ""), ")");
+                        Logger::log("[BOT #", id_, "]   Server Call: '", fn, "' (vars=", vars.size(),
+                                     (vars.size() > 1 && vars[1].type == 2 ? (" arg1='" + vars[1].str_val + "'") : ""), ")");
                     }
 
                     auto get_vint = [](const Variant& v) -> int {
@@ -753,27 +728,24 @@ void BotInstance::setupPacketHandlers() {
                         if (lvl > 0 && lvl < 250) {
                             stats_.level = lvl;
                         }
-                        Logger::log("[BOT #", id_, "] 🎉 AKUN ONLINE di world! (OnSpawn)");
+                        Logger::log("[BOT #", id_, "]   AKUN ONLINE di world! (OnSpawn)");
 
-                        // Otomatis sinkronisasi profil diri sendiri seperti Lucifer bot asli
                         std::thread([this]() {
-                            // Delay 2.5s setelah spawn sebelum wrench agar server stabil dan tidak memicu deteksi spam/macro
                             std::this_thread::sleep_for(std::chrono::milliseconds(2500));
                             if (!in_world_.load() || !enet_ || !enet_->isConnected()) return;
                             int my_netid = world_->getLocalNetId();
                             if (my_netid >= 0) {
-                                // 1. Wrench diri sendiri untuk meminta dialog profil (1 paket GENERIC_TEXT saja)
                                 enet_->sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT,
                                     "action|wrench\nnetid|" + std::to_string(my_netid) + "\n");
-                                Logger::log("[BOT #", id_, "] 🔧 Mengirim wrench profil diri sendiri (delay 2.5s pasca-spawn)...");
+                                Logger::log("[BOT #", id_, "]   Mengirim wrench profil diri sendiri (delay 2.5s pasca-spawn)...");
                             }
-                            // 2. Beri jeda 4 detik. HANYA jika stats profil belum terisi sama sekali, baru coba fallback /status
+
                             std::this_thread::sleep_for(std::chrono::milliseconds(4000));
                             if (!in_world_.load() || !enet_ || !enet_->isConnected()) return;
                             if (stats_.level <= 1 && stats_.played_hours <= 0.0f) {
                                 enet_->sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT,
                                     "action|input\n|text|/status\n");
-                                Logger::log("[BOT #", id_, "] 🔄 Mengirim /status fallback (stats profil belum terisi)...");
+                                Logger::log("[BOT #", id_, "]   Mengirim /status fallback (stats profil belum terisi)...");
                             }
                         }).detach();
                     }
@@ -788,7 +760,7 @@ void BotInstance::setupPacketHandlers() {
                         world_->parseRemove(remove_data);
                     }
                     else if (fn.find("OnFailedToEnterWorld") != std::string::npos) {
-                        Logger::log("[BOT #", id_, "] ⚠️ Gagal masuk world (mencoba ulang dalam 2s)...");
+                        Logger::log("[BOT #", id_, "]   Gagal masuk world (mencoba ulang dalam 2s)...");
                         std::thread([this, warp_to_target]() {
                             std::this_thread::sleep_for(std::chrono::milliseconds(2000));
                             if (!in_world_.load()) {
@@ -807,14 +779,14 @@ void BotInstance::setupPacketHandlers() {
                                 }
                             }
                             stats_.saveToFile(account_name_);
-                            Logger::log("[BOT #", id_, "] 💎 Stats diperbarui (OnSetBumperCoinValues): Gems=", stats_.gems, ", Level=", stats_.level);
+                            Logger::log("[BOT #", id_, "]   Stats diperbarui (OnSetBumperCoinValues): Gems=", stats_.gems, ", Level=", stats_.level);
                         }
                     }
                     else if (fn.find("OnSetGems") != std::string::npos || fn.find("SetGems") != std::string::npos) {
                         if (vars.size() > 1) {
                             stats_.gems = get_vint(vars[1]);
                             stats_.saveToFile(account_name_);
-                            Logger::log("[BOT #", id_, "] 💎 Stats Gems diperbarui: ", stats_.gems);
+                            Logger::log("[BOT #", id_, "]   Stats Gems diperbarui: ", stats_.gems);
                         }
                     }
                     else if (fn.find("OnSetLevel") != std::string::npos || fn.find("SetLevel") != std::string::npos) {
@@ -823,7 +795,7 @@ void BotInstance::setupPacketHandlers() {
                             if (lvl > 0 && lvl < 250) {
                                 stats_.level = lvl;
                                 stats_.saveToFile(account_name_);
-                                Logger::log("[BOT #", id_, "] ⭐ Stats Level diperbarui: ", stats_.level);
+                                Logger::log("[BOT #", id_, "]   Stats Level diperbarui: ", stats_.level);
                             }
                         }
                     }
@@ -834,12 +806,10 @@ void BotInstance::setupPacketHandlers() {
                             std::string clean_dmsg = Logger::stripColorCodes(dmsg);
                             if (stats_.parseFromText(dmsg)) {
                                 stats_.saveToFile(account_name_);
-                                Logger::log("[BOT #", id_, "] 📊 Stats diperbarui dari OnDialogRequest: Level=", stats_.level,
+                                Logger::log("[BOT #", id_, "]   Stats diperbarui dari OnDialogRequest: Level=", stats_.level,
                                             ", Gems=", stats_.gems, ", Played=", stats_.getEffectivePlayedHours(),
                                             "h, Age=", stats_.getEffectiveAgeDays(), "d");
                             }
-
-                            // Jika popup profil memiliki tombol 'personal_info', otomatis balas untuk membuka info detail
                             if (dmsg.find("personal_info") != std::string::npos ||
                                 dmsg.find("Show Personal") != std::string::npos) {
                                 std::string dname = "popup";
@@ -851,7 +821,6 @@ void BotInstance::setupPacketHandlers() {
                                         dname = dmsg.substr(dname_start, pipe - dname_start);
                                     }
                                 }
-                                // Beri jeda 600ms (reaksi klik tombol manusia) dan kirim HANYA 1 paket dialog_return
                                 std::thread([this, dname]() {
                                     std::this_thread::sleep_for(std::chrono::milliseconds(600));
                                     if (enet_ && enet_->isConnected()) {
@@ -861,7 +830,6 @@ void BotInstance::setupPacketHandlers() {
                                 }).detach();
                             } else if (dmsg.find("Total time played") != std::string::npos ||
                                        dmsg.find("created") != std::string::npos) {
-                                // Dialog detail profil (Continue) telah terbaca, tutup dialog secara wajar
                                 std::string dname = "popup";
                                 size_t epos = dmsg.find("end_dialog|");
                                 if (epos != std::string::npos) {
@@ -887,16 +855,17 @@ void BotInstance::setupPacketHandlers() {
                             std::string clean = Logger::stripColorCodes(cmsg);
                             if (stats_.parseFromText(clean)) {
                                 stats_.saveToFile(account_name_);
-                                Logger::log("[BOT #", id_, "] 📊 Stats diperbarui dari OnConsoleMessage: Level=", stats_.level,
+                                Logger::log("[BOT #", id_, "]   Stats diperbarui dari OnConsoleMessage: Level=", stats_.level,
                                             ", Gems=", stats_.gems, ", Age=", stats_.getEffectiveAgeDays(), "d");
                             }
-                            Logger::log("[BOT #", id_, "] 💬 Console: ", clean);
+                            Logger::log("[BOT #", id_, "]   Console: ", clean);
+
                             if (clean.find("IP") != std::string::npos || clean.find("ip") != std::string::npos ||
                                 clean.find("Logged in") != std::string::npos) {
                                 std::string ip = extractIpFromText(clean);
                                 if (!ip.empty()) {
                                     setServerReportedIp(ip);
-                                    Logger::log("[BOT #", id_, "] 🌐 IP terkonfirmasi dari OnConsoleMessage: ", ip);
+                                    Logger::log("[BOT #", id_, "]   IP terkonfirmasi dari OnConsoleMessage: ", ip);
                                 }
                             }
 
@@ -920,7 +889,7 @@ void BotInstance::setupPacketHandlers() {
                         if (stats_.parseFromText(bubble_msg)) {
                             stats_.saveToFile(account_name_);
                         }
-                        Logger::log("[BOT #", id_, "] 💬 [Bubble #", bubble_netid, "]: ", bubble_msg);
+                        Logger::log("[BOT #", id_, "]   [Bubble #", bubble_netid, "]: ", bubble_msg);
                         if (!bubble_msg.empty()) {
                             addConsoleMessage(ConsoleMsgType::World, bubble_msg);
                         }
@@ -932,11 +901,10 @@ void BotInstance::setupPacketHandlers() {
                         std::string ipDoor = vars.size() > 4 ? vars[4].str_val : "";
                         int lmode = vars.size() > 5 ? get_vint(vars[5]) : 1;
 
-                        Logger::log("[BOT #", id_, "] 🔁 Redirect sub-server: Port ", sub_port, " (Token: ", token, ")");
+                        Logger::log("[BOT #", id_, "]   Redirect sub-server: Port ", sub_port, " (Token: ", token, ")");
 
                         std::string sub_host = game_host;
                         std::string door_id = "0";
-
                         size_t pipe_pos = ipDoor.find('|');
                         if (pipe_pos != std::string::npos) {
                             std::string ip_part = ipDoor.substr(0, pipe_pos);
@@ -956,7 +924,7 @@ void BotInstance::setupPacketHandlers() {
 
                         std::thread([this, sub_host, sub_port, sub_handshake]() {
                             redirecting_ = true;
-                            Logger::log("[BOT #", id_, "] 🔄 Redirecting ke sub-server ", sub_host, ":", sub_port, "...");
+                            Logger::log("[BOT #", id_, "]   Redirecting ke sub-server ", sub_host, ":", sub_port, "...");
                             enet_->disconnect();
                             std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
@@ -976,16 +944,16 @@ void BotInstance::setupPacketHandlers() {
                                 if (proxy_tunnel_->start(proxy_, sub_host, static_cast<uint16_t>(sub_port), terr)) {
                                     sub_connect_host = proxy_tunnel_->getLocalHost();
                                     sub_connect_port = proxy_tunnel_->getLocalPort();
-                                    Logger::log("[BOT #", id_, "] 🔄 SOCKS5 UDP Tunnel dialihkan ke sub-server ", sub_host, ":", sub_port);
+                                    Logger::log("[BOT #", id_, "]   SOCKS5 UDP Tunnel dialihkan ke sub-server ", sub_host, ":", sub_port);
                                 } else {
-                                    Logger::log("[BOT #", id_, "] ❌ Gagal redirect SOCKS5 UDP Tunnel: ", terr);
+                                    Logger::log("[BOT #", id_, "]   Gagal redirect SOCKS5 UDP Tunnel: ", terr);
                                 }
                             }
 
                             if (enet_->connect(sub_connect_host, sub_connect_port, 6000)) {
-                                Logger::log("[BOT #", id_, "] ✅ Terhubung ke sub-server ", sub_host, ":", sub_port);
+                                Logger::log("[BOT #", id_, "]   Terhubung ke sub-server ", sub_host, ":", sub_port);
                             } else {
-                                Logger::log("[BOT #", id_, "] ❌ Gagal terhubung ke sub-server!");
+                                Logger::log("[BOT #", id_, "]   Gagal terhubung ke sub-server!");
                             }
                             redirecting_ = false;
                         }).detach();
@@ -1055,20 +1023,20 @@ int BotInstance::getPing() const {
 
 void BotInstance::queryServerStats() {
     if (!enet_ || !enet_->isConnected()) return;
+
     auto now = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_stats_query_).count();
     if (elapsed < 3000) {
-        Logger::log("[BOT #", id_, "] ⏳ Mohon tunggu ", (3000 - elapsed), "ms sebelum meminta sinkron stats lagi (Anti-Spam).");
+        Logger::log("[BOT #", id_, "]   Mohon tunggu ", (3000 - elapsed), "ms sebelum meminta sinkron stats lagi (Anti-Spam).");
         return;
     }
     last_stats_query_ = now;
 
-    // Kirim hanya 1 command dengan delay 400ms di thread terpisah agar tidak spam
     std::thread([this]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(400));
         if (enet_ && enet_->isConnected()) {
             enet_->sendText(GtPacket::NET_MESSAGE_GENERIC_TEXT, "action|input\n|text|/status\n");
-            Logger::log("[BOT #", id_, "] 🔄 Mengirim permintaan sinkronisasi stats (/status)...");
+            Logger::log("[BOT #", id_, "]   Mengirim permintaan sinkronisasi stats (/status)...");
         }
     }).detach();
 }

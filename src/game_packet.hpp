@@ -68,8 +68,8 @@ struct GameUpdatePacket {
     float    speed_x = 0.0f;        // X Velocity
     float    speed_y = 0.0f;        // Y Velocity
     float    secondary_padding = 0; // Padding
-    int32_t  int_x = 0;             // Tile X coordinate (0 when walking)
-    int32_t  int_y = 0;             // Tile Y coordinate (0 when walking)
+    int32_t  int_x = 0;             // Tile X coordinate (-1 when walking/collecting)
+    int32_t  int_y = 0;             // Tile Y coordinate (-1 when walking/collecting)
     uint32_t data_size = 0;         // Size of extended payload data
 };
 #pragma pack(pop)
@@ -98,10 +98,8 @@ namespace TankPacketHelper {
     // Deserialize TankPacket from buffer
     inline bool deserialize(const uint8_t* data, size_t size, GameUpdatePacket& out_pkt, std::vector<uint8_t>& out_extra) {
         if (size < sizeof(GameUpdatePacket)) return false;
-
         std::memcpy(&out_pkt, data, sizeof(GameUpdatePacket));
         out_extra.clear();
-
         if (size > sizeof(GameUpdatePacket)) {
             size_t extra_size = size - sizeof(GameUpdatePacket);
             out_extra.resize(extra_size);
@@ -134,8 +132,8 @@ namespace TankPacketHelper {
         pkt.pos_y = y;
         pkt.speed_x = 0.0f;
         pkt.speed_y = 0.0f;
-        pkt.int_x = 0;
-        pkt.int_y = 0;
+        pkt.int_x = -1;
+        pkt.int_y = -1;
         pkt.data_size = 0;
         return pkt;
     }
@@ -152,26 +150,29 @@ namespace TankPacketHelper {
         return pkt;
     }
 
-    // Create Item Activate Object Request (Format V1: Classic Proton GTPS - net_id = object_uid, pos = player_pos)
-    inline GameUpdatePacket createCollectObject(int object_uid, float player_x, float player_y) {
+    // Create Item Activate Object Request (Standar Growtopia / Lucifer / Bothax)
+    // net_id = -1, target_net_id = 0, main_data = object_uid, int_x = -1, int_y = -1
+    inline GameUpdatePacket createCollectObject(int object_uid, float pos_x, float pos_y) {
         GameUpdatePacket pkt{};
         pkt.type = PACKET_ITEM_ACTIVATE_OBJECT_REQUEST; // Type 11
-        pkt.net_id = object_uid;
-        pkt.target_net_id = object_uid;
+        pkt.net_id = -1;
+        pkt.target_net_id = 0;
+        pkt.flags = 0;
         pkt.main_data = object_uid;
-        pkt.pos_x = player_x;
-        pkt.pos_y = player_y;
-        pkt.int_x = 0;
-        pkt.int_y = 0;
+        pkt.pos_x = pos_x;
+        pkt.pos_y = pos_y;
+        pkt.int_x = -1;
+        pkt.int_y = -1;
         return pkt;
     }
 
-    // Create Item Activate Object Request (Format V2: Modern CPS/Lucifer GTPS - net_id = local_net_id, main_data = object_uid, pos = item_pos)
-    inline GameUpdatePacket createCollectObjectV2(int object_uid, int local_net_id, float item_x, float item_y) {
+    // Create Item Activate Object Request V2 (Fallback untuk GTPS yang memakai int_x/int_y = 0)
+    inline GameUpdatePacket createCollectObjectV2(int object_uid, int /*local_net_id*/, float item_x, float item_y) {
         GameUpdatePacket pkt{};
         pkt.type = PACKET_ITEM_ACTIVATE_OBJECT_REQUEST; // Type 11
-        pkt.net_id = (local_net_id >= 0) ? local_net_id : -1;
-        pkt.target_net_id = object_uid;
+        pkt.net_id = -1;
+        pkt.target_net_id = 0;
+        pkt.flags = 0;
         pkt.main_data = object_uid;
         pkt.pos_x = item_x;
         pkt.pos_y = item_y;

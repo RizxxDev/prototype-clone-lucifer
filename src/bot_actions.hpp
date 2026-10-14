@@ -16,7 +16,6 @@ class WorldState;
 // ============================================================
 // Lucifer Bot Actions & Auto-Farm Engine
 // ============================================================
-
 class BotActions {
 public:
     BotActions(EnetClient& enet, WorldState& world);
@@ -76,6 +75,7 @@ public:
 
     // Low level
     void sendTankPacket(const struct GameUpdatePacket& pkt, const uint8_t* extra = nullptr, size_t extra_len = 0);
+
     void setOnSendTankPacketHook(std::function<bool(const struct GameUpdatePacket&)> hook) {
         on_send_tank_hook_ = hook;
     }
@@ -83,6 +83,7 @@ public:
 private:
     EnetClient& enet_;
     WorldState& world_;
+
     std::mutex say_mtx_;
     std::chrono::steady_clock::time_point last_say_time_{};
 
@@ -91,8 +92,8 @@ private:
     std::unordered_map<uint32_t, int> collect_attempts_;
 
     // Movement-integrated Auto Collect parameters
-    std::atomic<int> pickup_delay_ms_{20}; // Delay interval 20ms
-    std::atomic<float> movement_collect_radius_{0.0f}; // Radius default 0.0 tile (bot harus berada di tile yang sama)
+    std::atomic<int> pickup_delay_ms_{100};
+    std::atomic<float> movement_collect_radius_{0.0f}; // 0.0f = ambil saat berada di tile yang sama / <= 1 tile
     std::atomic<bool> auto_collect_on_move_{true};
     std::atomic<uint32_t> last_collected_uid_{0};
     std::atomic<int> total_collected_count_{0};
@@ -104,6 +105,7 @@ private:
     std::atomic<int> punch_range_{3};
     std::atomic<int> build_range_{3};
     std::atomic<uint16_t> selected_item_{18}; // default 18 (Fist)
+
     std::function<bool(const struct GameUpdatePacket&)> on_send_tank_hook_{nullptr};
 };
 
@@ -143,6 +145,7 @@ public:
     uint16_t getFilterItemId() const { return filter_item_id_.load(); }
     void setDelayMs(int ms) { delay_ms_.store(ms); }
     int getDelayMs() const { return delay_ms_.load(); }
+
     void setPassiveEnabled(bool en);
     bool isPassiveEnabled() const { return passive_enabled_.load(); }
     void setProximityRadius(float radius_tiles) { proximity_radius_.store(std::max(0.0f, radius_tiles)); }
@@ -172,8 +175,8 @@ private:
     BotActions& actions_;
     WorldState& world_;
     std::atomic<bool> running_{false};
-    std::atomic<bool> passive_enabled_{true}; // Always ON by default as base feature
-    std::atomic<float> proximity_radius_{0.0f}; // Radius default 0.0 tile (bot harus berada di tile yang sama)
+    std::atomic<bool> passive_enabled_{true};
+    std::atomic<float> proximity_radius_{0.0f};
     std::atomic<uint16_t> filter_item_id_{0};
     std::atomic<int> delay_ms_{600};
     std::thread worker_;
@@ -189,4 +192,3 @@ private:
     std::unordered_map<uint32_t, int> retry_counts_;
     std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> collect_cooldowns_;
 };
-

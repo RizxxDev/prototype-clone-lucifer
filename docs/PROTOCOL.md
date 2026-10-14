@@ -291,16 +291,21 @@ Server GTPS menyiarkan pembaruan item terapung di world melalui Tank Packet:
 Klien resmi Growtopia dan Lucifer mengambil dropped item bukan dengan mengirim Tank Packet 8, melainkan:
 - **Tipe Paket**: `PACKET_ITEM_ACTIVATE_OBJECT_REQUEST` (Tank Packet Type `11` / `0x0B`).
 - **Dual-Payload Dispatch Architecture (Anti-Miss)**:
-  Karena variasi emulator GTPS (GT-Server, GrowtopiaServer, GTCpp) mengimplementasikan pembacaan field paket 11 yang berbeda-beda, bot mengirimkan **dua varian payload terkoordinasi**:
-  1. **Format V1 (Standar Legacy GTPS)**:
+  Karena variasi emulator GTPS (GT-Server, GrowtopiaServer, GTCpp, CPS) mengimplementasikan pembacaan field paket 11 yang berbeda-beda, bot mengirimkan **dua varian payload terkoordinasi**:
+  1. **Format V1 (Standar Growtopia / Lucifer / Bothax)**:
      - `pkt.type = PACKET_ITEM_ACTIVATE_OBJECT_REQUEST` (`11`).
-     - `pkt.net_id = object_uid` (Server membaca NetID sebagai Object UID).
-     - `pkt.pos_x = local_x`, `pkt.pos_y = local_y` (Koordinat bot).
-  2. **Format V2 (Modern / Strict Emulator)**:
-     - `pkt.type = PACKET_ITEM_ACTIVATE_OBJECT_REQUEST` (`11`).
-     - `pkt.net_id = local_net_id` (NetID bot sendiri).
+     - `pkt.net_id = -1` (Unset/wildcard net_id).
+     - `pkt.target_net_id = 0`.
      - `pkt.main_data = object_uid` (Object UID di field `value/main_data`).
-     - `pkt.pos_x = item_x`, `pkt.pos_y = item_y` (Koordinat target item di lantai).
+     - `pkt.pos_x = pos_x`, `pkt.pos_y = pos_y`.
+     - `pkt.int_x = -1`, `pkt.int_y = -1`.
+  2. **Format V2 (Fallback Tile Coordinate 0 / Modern CPS)**:
+     - `pkt.type = PACKET_ITEM_ACTIVATE_OBJECT_REQUEST` (`11`).
+     - `pkt.net_id = -1`.
+     - `pkt.target_net_id = 0`.
+     - `pkt.main_data = object_uid`.
+     - `pkt.pos_x = item_x`, `pkt.pos_y = item_y`.
+     - `pkt.int_x = 0`, `pkt.int_y = 0`.
 - **Proteksi Sanitasi UID**:
   Paket tidak dikirim jika `object_uid <= 0` untuk menghindari spam penolakan server terhadap UID `-1`.
 
@@ -357,10 +362,10 @@ Pada pengujian langsung di berbagai core server GTPS (Proton, CPS, Lucifer, Grow
 
 ### B. Solusi: Dual-Payload Protocol Dispatch
 Bot sekarang mengeksekusi pengiriman ganda berurutan secara transparan pada setiap kali fungsi `collect(...)` dipanggil:
-- **Payload 1 (Format V1 - Proton Compatible)**:
-  `net_id = object_uid`, `target_net_id = object_uid`, `pos = player_pos`
-- **Payload 2 (Format V2 - CPS / Lucifer Compatible)**:
-  `net_id = local_net_id`, `main_data = object_uid`, `target_net_id = object_uid`, `pos = item_pos`
+- **Payload 1 (Format V1 - Standar Growtopia / Lucifer / Bothax)**:
+  `net_id = -1`, `target_net_id = 0`, `main_data = object_uid`, `pos = player_pos`, `int_x = -1`, `int_y = -1`
+- **Payload 2 (Format V2 - Fallback Tile Coordinate 0 / Modern CPS)**:
+  `net_id = -1`, `target_net_id = 0`, `main_data = object_uid`, `pos = item_pos`, `int_x = 0`, `int_y = 0`
 - *Hasil*: Server varian apa pun akan selalu menerima setidaknya satu format yang cocok secara sempurna tanpa menolak request.
 
 ### C. Continuous Active Scanner Daemon (20ms – 50ms)
