@@ -387,6 +387,16 @@ Di bawah ini adalah kumpulan masalah non-sepele dalam reverse-engineering dan pe
   4. **Autonomous Unit Testing**:
      - Diverifikasi dengan test harness `scratch/test_collect_uid.cpp`: 4/4 tes passed 100%.
 
+### 28. Eliminasi Teleportasi Artifisial (PACKET_STATE) Saat Mengambil Dropped Item
+- **Status**: [SELESAI & TERVERIFIKASI]
+- **Masalah**: *"Ada beberapa kejadian ketika ada item yang di drop di dekat bot maka bot akan tp, hilangkan itu"* — Bot terlihat melakukan snap/teleportasi instan ke koordinat item saat item jatuh atau berada di dekat bot.
+- **Akar Masalah**:
+  Pada fungsi `BotActions::collect(...)`, terdapat blok kode yang memeriksa jarak `dx*dx + dy*dy <= 48*48` dan secara artifisial mengirimkan paket pergerakan `TankPacketHelper::createState(local_net, item_x, item_y, flags)`. Paket ini memperbarui koordinat avatar bot di server secara paksa ke titik jatuhnya item, sehingga server dan pemain lain melihat bot melakukan teleportasi seketika (snap) ke item.
+- **Solusi & Implementasi**:
+  1. Menghapus sepenuhnya pembuatan dan pengiriman `createState` dari fungsi `BotActions::collect(...)`.
+  2. Paket pengambilan item murni hanya mengirimkan `PACKET_ITEM_ACTIVATE_OBJECT_REQUEST` (Type 11) dengan koordinat item (`item_x, item_y`) tanpa mengubah atau memanipulasi posisi avatar pemain.
+  3. Avatar bot tetap berdiri tenang di posisinya (`px, py`) tanpa ada lonjakan/teleportasi posisi saat menyerap item.
+
 ---
 
 ## 🛠️ Panduan Debugging & Troubleshooting

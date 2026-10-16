@@ -166,18 +166,6 @@ void BotActions::collect(int object_uid, float px, float py, float item_x, float
         }
     }
 
-    // Jika bot berada di dekat item (<= 1.5 tile / 48px), sinkronkan PACKET_STATE ke koordinat item
-    // agar pemeriksaan jarak antara posisi player di server dan posisi item selalu valid
-    float dx = item_x - px;
-    float dy = item_y - py;
-    if (dx * dx + dy * dy <= (48.0f * 48.0f)) {
-        int local_net = world_.getLocalNetId();
-        if (local_net < 0) local_net = -1;
-        uint32_t flags = mod_fly_.load() ? TankFlags::FLYING : TankFlags::ON_GROUND;
-        auto state_pkt = TankPacketHelper::createState(local_net, item_x, item_y, flags);
-        sendTankPacket(state_pkt);
-    }
-
     // Kirim paket collect standar Growtopia (Type 11: net_id = -1, target_net_id = 0, main_data = object_uid)
     auto pkt = TankPacketHelper::createCollectObject(object_uid, item_x, item_y);
     sendTankPacket(pkt);

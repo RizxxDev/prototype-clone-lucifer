@@ -2,8 +2,14 @@
 #include "logger.hpp"
 #include <chrono>
 #include <sstream>
+#include <cstring>
+#include <mswsock.h>
 
 #pragma comment(lib, "ws2_32.lib")
+
+#ifndef SIO_UDP_CONNRESET
+#define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
+#endif
 
 static bool ensureWinsock() {
     static bool initialized = false;
@@ -14,6 +20,35 @@ static bool ensureWinsock() {
         }
     }
     return initialized;
+}
+
+static void disableUdpConnReset(SOCKET s) {
+    if (s == INVALID_SOCKET) return;
+    BOOL bNewBehavior = FALSE;
+    DWORD dwBytesReturned = 0;
+    WSAIoctl(s, SIO_UDP_CONNRESET, &bNewBehavior, sizeof(bNewBehavior),
+             nullptr, 0, &dwBytesReturned, nullptr, nullptr);
+}
+
+static bool recvExact(SOCKET s, uint8_t* buf, int len) {
+    int total = 0;
+    while (total < len) {
+        int r = recv(s, reinterpret_cast<char*>(buf + total), len - total, 0);
+        if (r <= 0) return false;
+        total += r;
+    }
+    return true;
+}
+
+// Periksa apakah IPv4 (dalam urutan byte jaringan / big-endian) adalah IP kosong, loopback, atau private NAT
+static bool isInternalOrZeroIp(const uint8_t ip[4]) {
+    if (ip[0] == 0) return true;                                     // 0.0.0.0/8
+    if (ip[0] == 127) return true;                                   // 127.0.0.0/8 (Loopback)
+    if (ip[0] == 10) return true;                                    // 10.0.0.0/8 (Private)
+    if (ip[0] == 172 && (ip[1] >= 16 && ip[1] <= 31)) return true;   // 172.16.0.0/12 (Private)
+    if (ip[0] == 192 && ip[1] == 168) return true;                   // 192.168.0.0/16 (Private)
+    if (ip[0] == 100 && (ip[1] >= 64 && ip[1] <= 127)) return true;  // 100.64.0.0/10 (CGNAT)
+    return false;
 }
 
 static void trimStr(std::string& s) {
@@ -135,7 +170,7 @@ bool Socks5Client::performConnect(SOCKET sock,
     }
 
     uint8_t resp[2] = {0};
-    if (recv(sock, reinterpret_cast<char*>(resp), 2, 0) != 2) {
+    if (!recvExact(sock, resp, 2)) {
         out_err = "Gagal terima respons method SOCKS5";
         return false;
     }
@@ -170,7 +205,7 @@ bool Socks5Client::performConnect(SOCKET sock,
         }
 
         uint8_t auth_resp[2] = {0};
-        if (recv(sock, reinterpret_cast<char*>(auth_resp), 2, 0) != 2) {
+        if (!recvExact(sock, auth_resp, 2)) {
             out_err = "Gagal terima respons auth SOCKS5";
             return false;
         }
@@ -210,7 +245,7 @@ bool Socks5Client::performConnect(SOCKET sock,
 
     // Baca respons (minimal 4 bytes header)
     uint8_t conn_resp[4] = {0};
-    if (recv(sock, reinterpret_cast<char*>(conn_resp), 4, 0) != 4) {
+    if (!recvExact(sock, conn_resp, 4)) {
         out_err = "Gagal terima respons CONNECT SOCKS5";
         return false;
     }
@@ -239,15 +274,15 @@ bool Socks5Client::performConnect(SOCKET sock,
         skip_bytes = 4 + 2; // IPv4 (4) + Port (2)
     } else if (atyp == 0x03) {
         uint8_t dlen = 0;
-        recv(sock, reinterpret_cast<char*>(&dlen), 1, 0);
+        if (!recvExact(sock, &dlen, 1)) return false;
         skip_bytes = dlen + 2; // Domain + Port (2)
     } else if (atyp == 0x04) {
         skip_bytes = 16 + 2; // IPv6 (16) + Port (2)
     }
 
     if (skip_bytes > 0) {
-        std::vector<char> dummy(skip_bytes);
-        recv(sock, dummy.data(), skip_bytes, 0);
+        std::vector<uint8_t> dummy(skip_bytes);
+        recvExact(sock, dummy.data(), skip_bytes);
     }
 
     return true;
@@ -273,12 +308,16 @@ bool Socks5Client::performUdpAssociate(SOCKET tcp_ctrl_sock,
     }
 
     uint8_t resp[2] = {0};
-    if (recv(tcp_ctrl_sock, reinterpret_cast<char*>(resp), 2, 0) != 2 || resp[0] != 0x05 || resp[1] == 0xFF) {
+    if (!recvExact(tcp_ctrl_sock, resp, 2) || resp[0] != 0x05 || resp[1] == 0xFF) {
         out_err = "Negosiasi method SOCKS5 UDP ditolak";
         return false;
     }
 
     if (resp[1] == 0x02) {
+        if (!has_auth) {
+            out_err = "Server proxy meminta username/password untuk UDP Associate";
+            return false;
+        }
         std::vector<uint8_t> auth_pkt;
         auth_pkt.push_back(0x01);
         auth_pkt.push_back(static_cast<uint8_t>(config.username.size()));
@@ -286,15 +325,18 @@ bool Socks5Client::performUdpAssociate(SOCKET tcp_ctrl_sock,
         auth_pkt.push_back(static_cast<uint8_t>(config.password.size()));
         auth_pkt.insert(auth_pkt.end(), config.password.begin(), config.password.end());
 
-        send(tcp_ctrl_sock, reinterpret_cast<const char*>(auth_pkt.data()), static_cast<int>(auth_pkt.size()), 0);
+        if (send(tcp_ctrl_sock, reinterpret_cast<const char*>(auth_pkt.data()), static_cast<int>(auth_pkt.size()), 0) <= 0) {
+            out_err = "Gagal kirim paket auth SOCKS5 UDP";
+            return false;
+        }
         uint8_t auth_resp[2] = {0};
-        if (recv(tcp_ctrl_sock, reinterpret_cast<char*>(auth_resp), 2, 0) != 2 || auth_resp[1] != 0x00) {
-            out_err = "Auth SOCKS5 UDP ditolak";
+        if (!recvExact(tcp_ctrl_sock, auth_resp, 2) || auth_resp[1] != 0x00) {
+            out_err = "Auth SOCKS5 UDP ditolak (Username/Password salah)";
             return false;
         }
     }
 
-    // 2. Kirim UDP ASSOCIATE (CMD 0x03)
+    // 2. Kirim UDP ASSOCIATE (CMD 0x03) dengan DST.ADDR = 0.0.0.0:0
     uint8_t udp_req[10] = {0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
     if (send(tcp_ctrl_sock, reinterpret_cast<const char*>(udp_req), 10, 0) <= 0) {
         out_err = "Gagal kirim permintaan UDP ASSOCIATE";
@@ -302,11 +344,10 @@ bool Socks5Client::performUdpAssociate(SOCKET tcp_ctrl_sock,
     }
 
     uint8_t udp_resp[4] = {0};
-    int r = recv(tcp_ctrl_sock, reinterpret_cast<char*>(udp_resp), 4, 0);
-    if (r != 4 || udp_resp[1] != 0x00) {
-        uint8_t rep = (r >= 2) ? udp_resp[1] : 0xFF;
+    if (!recvExact(tcp_ctrl_sock, udp_resp, 4) || udp_resp[1] != 0x00) {
+        uint8_t rep = udp_resp[1];
         if (rep == 0x07) {
-            out_err = "Server SOCKS5 tidak mendukung UDP (Command 0x03 Not Supported / TCP-Only Proxy)";
+            out_err = "Proxy ini adalah TCP-Only dan TIDAK mendukung UDP ASSOCIATE (Kode 0x07)";
         } else if (rep == 0x02) {
             out_err = "Server SOCKS5 memblokir UDP (Not Allowed by Ruleset)";
         } else if (rep == 0x04) {
@@ -321,32 +362,70 @@ bool Socks5Client::performUdpAssociate(SOCKET tcp_ctrl_sock,
 
     uint8_t atyp = udp_resp[3];
     if (atyp == 0x01) { // IPv4
-        uint8_t ip_bytes[4];
-        uint8_t port_bytes[2];
-        recv(tcp_ctrl_sock, reinterpret_cast<char*>(ip_bytes), 4, 0);
-        recv(tcp_ctrl_sock, reinterpret_cast<char*>(port_bytes), 2, 0);
+        uint8_t ip_bytes[4] = {0};
+        uint8_t port_bytes[2] = {0};
+        if (!recvExact(tcp_ctrl_sock, ip_bytes, 4) || !recvExact(tcp_ctrl_sock, port_bytes, 2)) {
+            out_err = "Gagal membaca alamat relay IPv4 dari respons UDP ASSOCIATE";
+            return false;
+        }
 
-        char ip_str[INET_ADDRSTRLEN];
+        char ip_str[INET_ADDRSTRLEN] = {0};
         inet_ntop(AF_INET, ip_bytes, ip_str, sizeof(ip_str));
         out_relay_ip = ip_str;
-        if (out_relay_ip == "0.0.0.0") {
-            out_relay_ip = config.host; // fallback ke host proxy
+
+        // Periksa apakah proxy host yang dikonfigurasi user adalah IP publik (bukan localhost/private)
+        uint8_t cfg_ip[4] = {0};
+        bool cfg_is_private = false;
+        if (inet_pton(AF_INET, config.host.c_str(), cfg_ip) == 1) {
+            cfg_is_private = isInternalOrZeroIp(cfg_ip);
         }
-        out_relay_port = (port_bytes[0] << 8) | port_bytes[1];
+
+        // Banyak server SOCKS5 di VPS/Cloud mengembalikan IP internal (0.0.0.0, 127.0.0.1, 10.x.x.x, 192.168.x.x)
+        // pada field BND.ADDR. Jika demikian, arahkan paket UDP ke IP publik proxy (config.host).
+        if (isInternalOrZeroIp(ip_bytes) && !cfg_is_private) {
+            Logger::log("[SOCKS5] Relay mengembalikan BND.ADDR internal (", out_relay_ip,
+                        "), mengalihkan tujuan UDP ke host proxy publik: ", config.host);
+            out_relay_ip = config.host;
+        }
+
+        out_relay_port = static_cast<uint16_t>((port_bytes[0] << 8) | port_bytes[1]);
+        if (out_relay_port == 0) {
+            out_relay_port = static_cast<uint16_t>(config.port);
+        }
         return true;
     } else if (atyp == 0x03) { // Domain name
         uint8_t dlen = 0;
-        recv(tcp_ctrl_sock, reinterpret_cast<char*>(&dlen), 1, 0);
-        std::vector<char> dname(dlen + 1, 0);
-        recv(tcp_ctrl_sock, dname.data(), dlen, 0);
-        uint8_t port_bytes[2];
-        recv(tcp_ctrl_sock, reinterpret_cast<char*>(port_bytes), 2, 0);
-        out_relay_ip = dname.data();
-        out_relay_port = (port_bytes[0] << 8) | port_bytes[1];
+        if (!recvExact(tcp_ctrl_sock, &dlen, 1)) return false;
+        std::vector<uint8_t> dname(dlen + 1, 0);
+        if (!recvExact(tcp_ctrl_sock, dname.data(), dlen)) return false;
+        uint8_t port_bytes[2] = {0};
+        if (!recvExact(tcp_ctrl_sock, port_bytes, 2)) return false;
+        out_relay_ip = reinterpret_cast<char*>(dname.data());
+        if (out_relay_ip.empty() || out_relay_ip == "0.0.0.0" || out_relay_ip == "localhost") {
+            out_relay_ip = config.host;
+        }
+        out_relay_port = static_cast<uint16_t>((port_bytes[0] << 8) | port_bytes[1]);
+        if (out_relay_port == 0) {
+            out_relay_port = static_cast<uint16_t>(config.port);
+        }
+        return true;
+    } else if (atyp == 0x04) { // IPv6 (16 bytes IP + 2 bytes port)
+        uint8_t ip6_bytes[16] = {0};
+        uint8_t port_bytes[2] = {0};
+        if (!recvExact(tcp_ctrl_sock, ip6_bytes, 16) || !recvExact(tcp_ctrl_sock, port_bytes, 2)) {
+            out_err = "Gagal membaca alamat relay IPv6 dari respons UDP ASSOCIATE";
+            return false;
+        }
+        // Gunakan IPv4/hostname proxy untuk pengiriman paket UDP IPv4
+        out_relay_ip = config.host;
+        out_relay_port = static_cast<uint16_t>((port_bytes[0] << 8) | port_bytes[1]);
+        if (out_relay_port == 0) {
+            out_relay_port = static_cast<uint16_t>(config.port);
+        }
         return true;
     }
 
-    out_err = "Relay address type selain IPv4/Domain belum didukung";
+    out_err = "Relay address type tidak dikenal: " + std::to_string(atyp);
     return false;
 }
 
@@ -418,6 +497,10 @@ SOCKET Socks5Client::createUdpAssociateControlSocket(const Socks5Config& config,
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&tv), sizeof(tv));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&tv), sizeof(tv));
 
+    // Aktifkan TCP Keep-Alive agar koneksi kontrol UDP ASSOCIATE tidak diputus karena idle
+    BOOL keepalive = TRUE;
+    setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<const char*>(&keepalive), sizeof(keepalive));
+
     struct addrinfo hints{}, *res = nullptr;
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
@@ -453,18 +536,28 @@ bool Socks5Client::testProxy(const Socks5Config& config, std::string& out_msg) {
 
     auto start_time = std::chrono::high_resolution_clock::now();
     std::string err;
-    // Coba hubungkan ke DNS Google 8.8.8.8 port 53 atau website umum via SOCKS5
     SOCKET sock = createConnectedSocket("1.1.1.1", 80, config, 4000, err);
     if (sock == INVALID_SOCKET) {
-        out_msg = "❌ Gagal: " + err;
+        out_msg = "❌ Gagal TCP: " + err;
         return false;
     }
-
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto latency_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
     closesocket(sock);
 
-    out_msg = "✅ SOCKS5 Terhubung! Latensi: " + std::to_string(latency_ms) + " ms";
+    // Uji apakah proxy juga mendukung UDP ASSOCIATE (wajib untuk ENet Growtopia)
+    std::string relay_ip;
+    uint16_t relay_port = 0;
+    std::string udp_err;
+    SOCKET udp_ctrl = createUdpAssociateControlSocket(config, relay_ip, relay_port, 4000, udp_err);
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto latency_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+
+    if (udp_ctrl == INVALID_SOCKET) {
+        out_msg = "⚠️ TCP OK (" + std::to_string(latency_ms) + "ms), tapi UDP GAGAL: " + udp_err;
+        return false;
+    }
+    closesocket(udp_ctrl);
+
+    out_msg = "✅ SOCKS5 TCP+UDP Aktif! Relay: " + relay_ip + ":" + std::to_string(relay_port) + " (" + std::to_string(latency_ms) + " ms)";
     return true;
 }
 
@@ -579,6 +672,7 @@ bool Socks5UdpTunnel::start(const Socks5Config& config,
         out_err = "Gagal membuat socket UDP lokal";
         return false;
     }
+    disableUdpConnReset(local_sock_);
 
     sockaddr_in local_bind{};
     local_bind.sin_family = AF_INET;
@@ -601,6 +695,7 @@ bool Socks5UdpTunnel::start(const Socks5Config& config,
         out_err = "Gagal membuat socket UDP upstream";
         return false;
     }
+    disableUdpConnReset(upstream_sock_);
 
     sockaddr_in up_bind{};
     up_bind.sin_family = AF_INET;
@@ -670,7 +765,7 @@ void Socks5UdpTunnel::relayLoop() {
         if (tcp_ctrl_sock_ != INVALID_SOCKET && FD_ISSET(tcp_ctrl_sock_, &read_fds)) {
             char peek_buf;
             int pr = recv(tcp_ctrl_sock_, &peek_buf, 1, MSG_PEEK);
-            if (pr <= 0) {
+            if (pr == 0 || (pr < 0 && WSAGetLastError() != WSAEWOULDBLOCK && WSAGetLastError() != WSAETIMEDOUT)) {
                 proxy_disconnected_ = true;
                 Logger::log("[SOCKS5] ⚠️ Koneksi TCP control proxy SOCKS5 terputus");
                 break;
@@ -701,6 +796,9 @@ void Socks5UdpTunnel::relayLoop() {
             int n = recvfrom(upstream_sock_, reinterpret_cast<char*>(in_buf.data()), static_cast<int>(in_buf.size()), 0,
                              nullptr, nullptr);
             if (n >= 10 && has_client_) {
+                // Pastikan FRAG == 0x00 sesuai RFC 1928
+                if (in_buf[2] != 0x00) continue;
+
                 int header_len = 10;
                 uint8_t atyp = in_buf[3];
                 if (atyp == 0x01) { // IPv4

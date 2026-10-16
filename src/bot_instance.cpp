@@ -522,14 +522,17 @@ void BotInstance::setupPacketHandlers() {
                 stats_.saveToFile(account_name_);
             }
             if (text.find("action|play_sfx") == std::string::npos &&
-                text.find("action|ping") == std::string::npos &&
-                text.find("add_label") == std::string::npos &&
-                text.find("add_button") == std::string::npos &&
-                text.find("add_spacer") == std::string::npos) {
+                text.find("action|ping") == std::string::npos) {
                 while (!clean.empty() && (clean.back() == '\r' || clean.back() == '\n' || clean.back() == ' ')) clean.pop_back();
-                if (!clean.empty() && clean.size() < 120) {
+                if (!clean.empty() && clean.size() < 2000) {
                     Logger::log("[BOT #", id_, "]   ", clean);
+                    addConsoleMessage(ConsoleMsgType::System, clean);
                 }
+            }
+
+            if (text.find("action|logon_fail") != std::string::npos ||
+                text.find("Logout") != std::string::npos) {
+                cached_token_.clear();
             }
 
             if (text.find("Entering game") != std::string::npos ||

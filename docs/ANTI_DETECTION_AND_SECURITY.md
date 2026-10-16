@@ -185,15 +185,45 @@ end
 ```
 
 ### F. Mode Hybrid (TCP-Only SOCKS5 + Direct UDP Fallback)
-Sebagian besar penyedia proxy komersial (seperti Webshare, BrightData, Oxylabs, Smartproxy) hanya mengaktifkan `CMD 0x01` (TCP CONNECT) untuk web browsing, dan menonaktifkan `CMD 0x03` (UDP ASSOCIATE) sehingga mengembalikan error RFC 1928 `REP 0x07 (Command not supported)`.
+Sebagian besar penyedia proxy komersial web (seperti Webshare, BrightData, Oxylabs, Smartproxy) hanya mengaktifkan `CMD 0x01` (TCP CONNECT) untuk web browsing/scraping, dan menonaktifkan `CMD 0x03` (UDP ASSOCIATE) sehingga mengembalikan error RFC 1928 `REP 0x07 (Command not supported)`.
 
-Untuk mengatasi keterbatasan provider ini tanpa mengorbankan keamanan bot:
+Pada bot ini:
 1. **Pemisahan Jalur Protokol**:
    - **HTTP Login & Web Auth (TCP)**: Tetap dialirkan 100% melalui SOCKS5 TCP CONNECT. Server GTPS (`server_data.php` dan `login.creativeps.eu`) mendeteksi IP proxy, sehingga akun bebas dari rate limiting dan web ban.
-   - **Game Protocol (UDP ENet)**: Jika proxy menolak UDP ASSOCIATE, bot secara otomatis beralih (*graceful fallback*) ke Direct UDP untuk koneksi in-game.
+   - **Game Protocol (UDP ENet)**: Jika proxy menolak UDP ASSOCIATE, bot dapat beralih (*graceful fallback*) ke Direct UDP untuk koneksi in-game.
 2. **Flag Konfigurasi `udp_fallback_direct`**:
-   - Nilai default: `true`.
-   - Menjamin bot langsung bisa masuk ke dalam game dan tidak terjebak dalam siklus reconnect tak berujung meskipun menggunakan proxy TCP-Only.
+   - Nilai default: `false` (**Strict Anti-Leak Kill-Switch**).
+   - Secara default, bot menolak menyambung jika proxy menolak UDP ASSOCIATE agar IP publik asli (rumah) tidak bocor tanpa disadari oleh pengguna. Jika pengguna sengaja ingin bermain dengan IP rumah dan hanya memakai proxy untuk web login, flag ini dapat diubah ke `true`.
+
+### G. Opsi SOCKS5 Zero-Leak IP (Full UDP Support Tanpa Membocorkan IP Asli)
+Jika Anda ingin IP game server dan IP web login **100% tersembunyi** tanpa membocorkan IP asli:
+
+1. **Self-Hosted SOCKS5 di VPS (Dante Server) — Sangat Direkomendasikan (Termurah & Paling Stabil)**:
+   - Sewa VPS Linux murah ($1–$3/bulan di Hetzner, DigitalOcean, Vultr, AWS Lightsail, atau Free Tier Oracle Cloud).
+   - Install Dante Server: `sudo apt update && sudo apt install -y danted`
+   - Konfigurasi `/etc/danted.conf` dengan dukungan `udpassociate`:
+     ```text
+     logoutput: /var/log/danted.log
+     internal: 0.0.0.0 port = 1080
+     external: eth0
+     socksmethod: username none
+     client pass {
+         from: 0.0.0.0/0 to: 0.0.0.0/0
+     }
+     socks pass {
+         from: 0.0.0.0/0 to: 0.0.0.0/0
+         command: bind connect udpassociate
+     }
+     ```
+   - Restart service: `sudo systemctl restart danted`
+   - Gunakan format proxy `ip_vps:1080` (atau tambah username/password Linux). Proxy ini mendukung penuh `Socks5UdpTunnel` dengan latensi rendah dan tanpa bocor IP.
+
+2. **Provider Proxy Komersial dengan Fitur UDP**:
+   - Gunakan provider yang secara spesifik mendukung SOCKS5 UDP Relay / Port Forwarding, seperti **Pia S5 Proxy (piaproxy.com)**, **922 S5 Proxy**, atau **LunaProxy (paket SOCKS5 UDP)**.
+   - Hindari provider tipe "Web-Only / HTTP-focused" seperti Webshare standar jika tujuan utamanya adalah full in-game routing.
+
+3. **WireGuard / OpenVPN System-Wide**:
+   - Mengalihkan seluruh rute jaringan PC melalui VPN (seperti Mullvad, ProtonVPN, atau WireGuard pribadi di VPS). Bot menggunakan mode Direct, namun seluruh paket UDP secara transparan keluar dari gateway VPN.
 
 ---
 

@@ -21,7 +21,7 @@ struct Socks5Config {
     int port = 1080;
     std::string username;
     std::string password;
-    bool udp_fallback_direct = true; // Fallback ke Direct UDP jika proxy tidak mendukung UDP ASSOCIATE (TCP-only proxy)
+    bool udp_fallback_direct = false; // Matikan fallback direct agar IP asli tidak pernah bocor ke game server
 
     // Parse string format: "host:port", "host:port:user:pass", atau "socks5://user:pass@host:port"
     static Socks5Config parse(const std::string& str);
@@ -46,7 +46,7 @@ public:
                                    uint16_t& out_relay_port,
                                    std::string& out_err);
 
-    // Tes konektivitas proxy SOCKS5
+    // Tes konektivitas proxy SOCKS5 (TCP + UDP Associate)
     static bool testProxy(const Socks5Config& config, std::string& out_msg);
     static bool testConnection(const Socks5Config& config, float& out_latency_ms, std::string& out_msg);
 
